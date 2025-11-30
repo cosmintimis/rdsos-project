@@ -82,6 +82,113 @@ class PacketParser:
             return 0, 0
 
     @staticmethod
+    def parse_rsn_ie(tag_data):
+        """
+        Parse RSN (Robust Security Network) Information Element.
+        Extracts WPA2/WPA3 details, cipher suites, and authentication methods.
+        
+        Args:
+            tag_data: RSN IE payload bytes
+            
+        Returns:
+            dict with security details or None
+        """
+        try:
+            if len(tag_data) < 8:
+                return {'security': 'WPA2'}
+            
+            # Version (2 bytes)
+            version = struct.unpack('<H', tag_data[0:2])[0]
+            
+            # Group Cipher Suite (4 bytes): OUI (3) + Type (1)
+            group_cipher_type = tag_data[5] if len(tag_data) > 5 else 0
+            
+            cipher_map = {
+                0: 'None',
+                1: 'WEP-40',
+                2: 'TKIP',
+                4: 'CCMP (AES)',
+                5: 'WEP-104',
+                6: 'BIP',
+                8: 'GCMP',
+                9: 'GCMP-256',
+                10: 'CCMP-256'
+            }
+            group_cipher = cipher_map.get(group_cipher_type, f'Unknown({group_cipher_type})')
+            
+            offset = 6
+            
+            # Pairwise Cipher Suite Count (2 bytes)
+            if offset + 2 > len(tag_data):
+                return {'security': 'WPA2', 'group_cipher': group_cipher}
+            
+            pairwise_count = struct.unpack('<H', tag_data[offset:offset+2])[0]
+            offset += 2
+            
+            # Pairwise Cipher Suites (4 bytes each)
+            pairwise_ciphers = []
+            for i in range(min(pairwise_count, 5)):  # Limit to 5 to avoid issues
+                if offset + 4 <= len(tag_data):
+                    cipher_type = tag_data[offset + 3]
+                    pairwise_ciphers.append(cipher_map.get(cipher_type, f'Unknown({cipher_type})'))
+                    offset += 4
+                else:
+                    break
+            
+            # Auth Key Management (AKM) Suite Count (2 bytes)
+            if offset + 2 > len(tag_data):
+                return {
+                    'security': 'WPA2',
+                    'group_cipher': group_cipher,
+                    'pairwise_ciphers': pairwise_ciphers
+                }
+            
+            akm_count = struct.unpack('<H', tag_data[offset:offset+2])[0]
+            offset += 2
+            
+            # AKM Suites (4 bytes each)
+            akm_map = {
+                1: 'WPA2-Enterprise (802.1X)',
+                2: 'WPA2-Personal (PSK)',
+                3: 'FT over 802.1X',
+                4: 'FT over PSK',
+                5: 'WPA2-Enterprise SHA256',
+                6: 'WPA2-Personal SHA256',
+                8: 'WPA3-SAE',
+                9: 'FT over SAE',
+                11: 'WPA3-Enterprise Suite-B',
+                12: 'WPA3-Enterprise 192-bit',
+                18: 'OWE (Opportunistic Wireless Encryption)'
+            }
+            
+            auth_methods = []
+            for i in range(min(akm_count, 5)):
+                if offset + 4 <= len(tag_data):
+                    akm_type = tag_data[offset + 3]
+                    auth_methods.append(akm_map.get(akm_type, f'Unknown({akm_type})'))
+                    offset += 4
+                else:
+                    break
+            
+            # Determine security type based on AKM
+            security = 'WPA2'
+            if any('WPA3' in method for method in auth_methods):
+                security = 'WPA3'
+            elif any('OWE' in method for method in auth_methods):
+                security = 'OWE'
+            
+            return {
+                'security': security,
+                'rsn_version': version,
+                'group_cipher': group_cipher,
+                'pairwise_ciphers': pairwise_ciphers,
+                'auth_methods': auth_methods
+            }
+            
+        except Exception:
+            return {'security': 'WPA2'}
+
+    @staticmethod
     def parse_80211(packet, radiotap_len):
         """
         Parses 802.11 frame.
@@ -132,8 +239,13 @@ class PacketParser:
                     elif tag_num == 3: # DS Parameter Set (Channel)
                         if len(tag_data) == 1:
                             channel = tag_data[0]
-                    elif tag_num == 48: # RSN (WPA2)
-                        security = "WPA2"
+                    elif tag_num == 48: # RSN (WPA2/WPA3)
+                        # Parse detailed RSN information
+                        rsn_info = PacketParser.parse_rsn_ie(tag_data)
+                        if rsn_info:
+                            security = rsn_info.get('security', 'WPA2')
+                            # Store RSN details for later
+                            rsn_details = rsn_info
                     elif tag_num == 221: # Vendor Specific (WPA)
                         # Check for Microsoft OUI 00:50:f2 and type 1
                         if len(tag_data) >= 4 and tag_data.startswith(b'\x00\x50\xf2\x01'):
@@ -142,14 +254,12 @@ class PacketParser:
                     tag_offset += 2 + tag_len
                 
                 # Check for WEP (Privacy bit in Capability Info)
-                # Cap Info is at offset 10 (2 bytes) in Fixed Parameters
-                # Fixed params start at 24. So 24+10 = 34.
-                cap_info = struct.unpack('H', frame[34:36])[0]
+                cap_info = struct.unpack('<H', frame[34:36])[0]
                 if security == "Open" and (cap_info & 0x0010):
                     security = "WEP"
                 vendor = get_vendor(bssid_str)
                 
-                return {
+                result = {
                     'type': 'BEACON',
                     'ssid': ssid,
                     'bssid': bssid_str,
@@ -157,6 +267,22 @@ class PacketParser:
                     'security': security,
                     'vendor': vendor
                 }
+                
+                # Add detailed RSN info if available
+                if 'rsn_details' in locals() and rsn_details:
+                    result['rsn_version'] = rsn_details.get('rsn_version')
+                    result['group_cipher'] = rsn_details.get('group_cipher')
+                    result['pairwise_ciphers'] = rsn_details.get('pairwise_ciphers', [])
+                    result['auth_methods'] = rsn_details.get('auth_methods', [])
+                    # Create crypto description
+                    if result['pairwise_ciphers']:
+                        result['crypto'] = f"{security} ({'/'.join(result['pairwise_ciphers'][:2])})"
+                    else:
+                        result['crypto'] = security
+                else:
+                    result['crypto'] = security
+                
+                return result
             
             return None
             

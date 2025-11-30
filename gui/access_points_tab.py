@@ -125,6 +125,14 @@ class AccessPointsTab(ttk.Frame):
             ("Security:", data.get('security', 'Unknown')),
         ]
         
+        # Add RSN security details if available
+        if 'auth_methods' in data and data['auth_methods']:
+            details.append(("Authentication:", ", ".join(data['auth_methods'][:2])))
+        if 'group_cipher' in data:
+            details.append(("Group Cipher:", data['group_cipher']))
+        if 'pairwise_ciphers' in data and data['pairwise_ciphers']:
+            details.append(("Pairwise Cipher:", ", ".join(data['pairwise_ciphers'][:2])))
+        
         for label_text, value_text in details:
             row = tk.Frame(content, bg="#2b2b2b")
             row.pack(fill=tk.X, pady=5)
