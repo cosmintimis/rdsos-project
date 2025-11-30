@@ -37,10 +37,47 @@ def check_monitor_mode(interface):
         return False
     except Exception as e:
         print(f"Warning: Could not check monitor mode: {e}")
-        return True # Assume yes if we can't check? Or fail? Let's fail safe but warn.
-        # Actually user wants error if not. So return False if we can't verify?
-        # Let's return False to be safe as per request.
         return False
+
+def check_managed_mode(interface):
+    """
+    Checks if the interface is in Managed mode (not Monitor mode).
+    """
+    try:
+        # Run iwconfig
+        result = subprocess.run(
+            ["iwconfig", interface],
+            capture_output=True,
+            text=True
+        )
+        # Check output for "Mode:Managed"
+        if "Mode:Managed" in result.stdout:
+            return True
+        # Also check it's NOT in Monitor mode
+        if "Mode:Monitor" in result.stdout:
+            return False
+        return False
+    except FileNotFoundError:
+        # Try 'iw' command if iwconfig is missing
+        try:
+            result = subprocess.run(
+                ["iw", "dev", interface, "info"],
+                capture_output=True,
+                text=True
+            )
+            # If it's monitor, return False
+            if "type monitor" in result.stdout:
+                return False
+            # If it's managed/station, return True
+            if "type managed" in result.stdout or "type station" in result.stdout:
+                return True
+        except:
+            pass
+        return False
+    except Exception as e:
+        print(f"Warning: Could not check managed mode: {e}")
+        return False
+
 
 def packet_handler(raw_data, result_queue, debug=False, managed=False):
     """
@@ -98,7 +135,15 @@ def main():
             print("Please enable monitor mode using 'sudo airmon-ng start <interface>' or equivalent.")
             sys.exit(1)
     else:
+        # Check for Managed Mode
+        if not check_managed_mode(interface):
+            print(f"Error: Interface {interface} is not in Managed mode.")
+            print("The interface appears to be in Monitor mode or another mode.")
+            print("Please disable monitor mode using 'sudo airmon-ng stop <interface>' or")
+            print("reconnect to a WiFi network to return to Managed mode.")
+            sys.exit(1)
         print("[*] Running in Managed Mode (Ethernet)")
+
     
     # Queue for thread communication
     result_queue = queue.Queue()

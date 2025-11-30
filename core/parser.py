@@ -229,16 +229,32 @@ class PacketParser:
                     }
                     
             else:
-                # Managed Mode (Ethernet)
+                # Managed Mode - Parse Complete Ethernet Frame
                 if len(data) < 14: return None
                 
+                # Ethernet II Frame Header (14 bytes)
+                # Destination MAC (6 bytes)
                 dst_mac_bytes = data[0:6]
-                src_mac_bytes = data[6:12]
-                
                 dst_mac = ':'.join('%02x' % b for b in dst_mac_bytes)
+                
+                # Source MAC (6 bytes)
+                src_mac_bytes = data[6:12]
                 src_mac = ':'.join('%02x' % b for b in src_mac_bytes)
                 
+                # EtherType (2 bytes)
                 ethertype = struct.unpack('!H', data[12:14])[0]
+                
+                # EtherType mappings
+                ethertype_map = {
+                    0x0800: 'IPv4',
+                    0x0806: 'ARP',
+                    0x86DD: 'IPv6',
+                    0x8100: 'VLAN-tagged',
+                    0x8847: 'MPLS unicast',
+                    0x8848: 'MPLS multicast'
+                }
+                ethertype_name = ethertype_map.get(ethertype, f'Unknown (0x{ethertype:04x})')
+                
                 ip_offset = 14
             
             # 2. Parse IP Header (COMPLETE - All Fields)
@@ -386,6 +402,87 @@ class PacketParser:
                         if http_data:
                             packet_info['http'] = http_data
                             packet_info['info'] = f"HTTP {http_data.get('method', http_data.get('status_code', ''))} {src_port} → {dst_port}"
+                    
+                # UDP Protocol (17)
+                elif protocol == 17:  # UDP
+                    udp_offset = ip_offset + header_length
+                    udp_header = data[udp_offset:udp_offset+8]
+                    if len(udp_header) < 8: return packet_info
+                    
+                    # UDP Header: Src Port (2), Dst Port (2), Length (2), Checksum (2)
+                    src_port = struct.unpack('!H', udp_header[0:2])[0]
+                    dst_port = struct.unpack('!H', udp_header[2:4])[0]
+                    length = struct.unpack('!H', udp_header[4:6])[0]
+                    udp_checksum = struct.unpack('!H', udp_header[6:8])[0]
+                    
+                    # Common UDP services
+                    service_map = {
+                        53: 'DNS',
+                        67: 'DHCP (Server)',
+                        68: 'DHCP (Client)',
+                        123: 'NTP',
+                        161: 'SNMP',
+                        162: 'SNMP Trap',
+                        514: 'Syslog',
+                        1900: 'SSDP'
+                    }
+                    service = service_map.get(src_port) or service_map.get(dst_port) or ''
+                    
+                    payload_offset = udp_offset + 8
+                    payload = data[payload_offset:]
+                    
+                    packet_info.update({
+                        'type': 'UDP',
+                        'src_port': src_port,
+                        'dst_port': dst_port,
+                        'udp_length': length,
+                        'udp_checksum': f'0x{udp_checksum:04x}',
+                        'udp_service': service,
+                        'payload': payload,
+                        'info': f'UDP {src_port} → {dst_port}' + (f' ({service})' if service else '')
+                    })
+                
+                # ICMP Protocol (1)
+                elif protocol == 1:  # ICMP
+                    icmp_offset = ip_offset + header_length
+                    icmp_header = data[icmp_offset:icmp_offset+8]
+                    if len(icmp_header) < 8: return packet_info
+                    
+                    # ICMP Header: Type (1), Code (1), Checksum (2), Rest of Header (4)
+                    icmp_type = icmp_header[0]
+                    icmp_code = icmp_header[1]
+                    icmp_checksum = struct.unpack('!H', icmp_header[2:4])[0]
+                    rest_of_header = struct.unpack('!I', icmp_header[4:8])[0]
+                    
+                    # For Echo Request/Reply, rest_of_header contains:
+                    # Identifier (2 bytes) + Sequence Number (2 bytes)
+                    identifier = rest_of_header >> 16
+                    sequence = rest_of_header & 0xFFFF
+                    
+                    # ICMP Type meanings
+                    type_map = {
+                        0: 'Echo Reply (Ping Reply)',
+                        3: 'Destination Unreachable',
+                        4: 'Source Quench',
+                        5: 'Redirect',
+                        8: 'Echo Request (Ping)',
+                        11: 'Time Exceeded',
+                        12: 'Parameter Problem',
+                        13: 'Timestamp Request',
+                        14: 'Timestamp Reply'
+                    }
+                    type_name = type_map.get(icmp_type, f'Type {icmp_type}')
+                    
+                    packet_info.update({
+                        'type': 'ICMP',
+                        'icmp_type': icmp_type,
+                        'icmp_type_name': type_name,
+                        'icmp_code': icmp_code,
+                        'icmp_checksum': f'0x{icmp_checksum:04x}',
+                        'icmp_identifier': identifier,
+                        'icmp_sequence': sequence,
+                        'info': f'ICMP {type_name}' + (f' (ID={identifier}, Seq={sequence})' if icmp_type in [0, 8] else '')
+                    })
                     
                 return packet_info
                 

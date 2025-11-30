@@ -129,6 +129,18 @@ class SnifferTab(ttk.Frame):
             notebook.add(tcp_frame, text="TCP Header")
             self._add_tcp_tab(tcp_frame, packet_info)
         
+        # UDP Header Tab (if present)
+        if 'udp_length' in packet_info:
+            udp_frame = tk.Frame(notebook, bg="#2b2b2b")
+            notebook.add(udp_frame, text="UDP Header")
+            self._add_udp_tab(udp_frame, packet_info)
+        
+        # ICMP Header Tab (if present)
+        if 'icmp_type' in packet_info:
+            icmp_frame = tk.Frame(notebook, bg="#2b2b2b")
+            notebook.add(icmp_frame, text="ICMP Header")
+            self._add_icmp_tab(icmp_frame, packet_info)
+        
         # HTTP Payload Tab (if present)
         if 'http' in packet_info:
             http_frame = tk.Frame(notebook, bg="#2b2b2b")
@@ -211,6 +223,72 @@ Urgent Pointer: {packet_info.get('tcp_urgent_pointer', 'N/A')}
 """
         text.insert(tk.END, tcp_details)
         text.config(state=tk.DISABLED)
+
+    def _add_udp_tab(self, parent, packet_info):
+        """Add UDP header details"""
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.NONE)
+        scrollbar = ttk.Scrollbar(parent, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
+        
+        service = packet_info.get('udp_service', '')
+        
+        udp_details = f"""UDP HEADER
+==========
+
+Source Port: {packet_info.get('src_port', 'N/A')}
+Destination Port: {packet_info.get('dst_port', 'N/A')}
+Length: {packet_info.get('udp_length', 'N/A')} bytes
+Checksum: {packet_info.get('udp_checksum', 'N/A')}
+Service: {service if service else 'Unknown'}
+
+Note: UDP is a connectionless protocol with no handshake,
+sequence numbers, or acknowledgments (unlike TCP).
+"""
+        text.insert(tk.END, udp_details)
+        text.config(state=tk.DISABLED)
+
+    def _add_icmp_tab(self, parent, packet_info):
+        """Add ICMP header details"""
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.NONE)
+        scrollbar = ttk.Scrollbar(parent, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
+        
+        icmp_type = packet_info.get('icmp_type', 'N/A')
+        is_ping = icmp_type in [0, 8]
+        
+        icmp_details = f"""ICMP HEADER
+===========
+
+Type: {icmp_type} ({packet_info.get('icmp_type_name', 'Unknown')})
+Code: {packet_info.get('icmp_code', 'N/A')}
+Checksum: {packet_info.get('icmp_checksum', 'N/A')}
+"""
+        
+        if is_ping:
+            icmp_details += f"""
+Ping Details:
+  Identifier: {packet_info.get('icmp_identifier', 'N/A')}
+  Sequence Number: {packet_info.get('icmp_sequence', 'N/A')}
+
+Purpose: Used by 'ping' command to test network connectivity.
+Type 8 = Echo Request (ping sent)
+Type 0 = Echo Reply (response received)
+"""
+        else:
+            icmp_details += """
+Purpose: ICMP is used for network diagnostics and error reporting.
+Common uses: ping, traceroute, network unreachable messages.
+"""
+        
+        text.insert(tk.END, icmp_details)
+        text.config(state=tk.DISABLED)
+
 
     def _add_http_tab(self, parent, http_info):
         """Add HTTP payload details"""
