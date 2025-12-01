@@ -9,6 +9,9 @@ class SnifferTab(ttk.Frame):
         # Pause state
         self.paused = False
         
+        # Filter state
+        self.filter_var = tk.StringVar(value="All Packets")
+        
         # Controls
         controls_frame = tk.Frame(self)
         controls_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -27,6 +30,25 @@ class SnifferTab(ttk.Frame):
             cursor="hand2"
         )
         self.pause_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Filter dropdown
+        tk.Label(controls_frame, text="Filter:", font=("Arial", 10)).pack(side=tk.LEFT, padx=(20, 5))
+        filter_options = [
+            "All Packets",
+            "HTTP Only",
+            "TCP Only",
+            "UDP Only",
+            "ICMP Only",
+            "IP Only (TCP/UDP/ICMP)"
+        ]
+        self.filter_dropdown = ttk.Combobox(
+            controls_frame,
+            textvariable=self.filter_var,
+            values=filter_options,
+            state="readonly",
+            width=20
+        )
+        self.filter_dropdown.pack(side=tk.LEFT, padx=5)
         
         # Channel lock controls
         tk.Label(controls_frame, text="Lock Channel:").pack(side=tk.LEFT, padx=(20, 0))
@@ -84,6 +106,28 @@ class SnifferTab(ttk.Frame):
         # Skip if paused
         if self.paused:
             return
+        
+        # Apply filter
+        current_filter = self.filter_var.get()
+        packet_type = packet_info.get('type', '')
+        
+        if current_filter == "HTTP Only":
+            # Only show packets with HTTP data
+            if 'http' not in packet_info:
+                return
+        elif current_filter == "TCP Only":
+            if packet_type != 'TCP':
+                return
+        elif current_filter == "UDP Only":
+            if packet_type != 'UDP':
+                return
+        elif current_filter == "ICMP Only":
+            if packet_type != 'ICMP':
+                return
+        elif current_filter == "IP Only (TCP/UDP/ICMP)":
+            if packet_type not in ['TCP', 'UDP', 'ICMP']:
+                return
+        # "All Packets" - no filtering
         
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         
