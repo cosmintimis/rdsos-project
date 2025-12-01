@@ -6,11 +6,30 @@ class SnifferTab(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         
+        # Pause state
+        self.paused = False
+        
         # Controls
         controls_frame = tk.Frame(self)
         controls_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        tk.Label(controls_frame, text="Lock Channel:").pack(side=tk.LEFT)
+        # Pause/Resume button
+        self.pause_btn = tk.Button(
+            controls_frame, 
+            text="⏸ Pause Capture", 
+            command=self.toggle_pause,
+            bg="#4CAF50",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            relief=tk.FLAT,
+            padx=10,
+            pady=5,
+            cursor="hand2"
+        )
+        self.pause_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Channel lock controls
+        tk.Label(controls_frame, text="Lock Channel:").pack(side=tk.LEFT, padx=(20, 0))
         self.channel_var = tk.StringVar()
         tk.Entry(controls_frame, textvariable=self.channel_var, width=5).pack(side=tk.LEFT, padx=5)
         tk.Button(controls_frame, text="Set", command=self.set_channel).pack(side=tk.LEFT)
@@ -44,10 +63,28 @@ class SnifferTab(ttk.Frame):
         # Store full packet data (for detail view)
         self.packet_data = {}
 
+    def toggle_pause(self):
+        """Toggle packet capture pause state"""
+        self.paused = not self.paused
+        if self.paused:
+            self.pause_btn.config(
+                text="▶ Resume Capture",
+                bg="#FF5722"  # Red/orange when paused
+            )
+        else:
+            self.pause_btn.config(
+                text="⏸ Pause Capture",
+                bg="#4CAF50"  # Green when active
+            )
+
     def add_packet(self, packet_info):
         """
         packet_info: Enhanced with complete IP/TCP fields and HTTP data
         """
+        # Skip if paused
+        if self.paused:
+            return
+        
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         
         src = packet_info.get('src_ip', 'N/A')
