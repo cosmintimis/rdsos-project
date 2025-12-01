@@ -655,15 +655,23 @@ class PacketParser:
                 
                 # Extract headers (until blank line)
                 headers = []
+                content_type = None
                 for line in lines[1:]:
                     if line == '':
                         break
                     if ':' in line:
                         headers.append(line)
+                        # Check for Content-Type
+                        if line.lower().startswith('content-type:'):
+                            content_type = line.split(':', 1)[1].strip()
                 
                 # Body is after blank line
                 body_start = text.find('\r\n\r\n')
-                body = text[body_start+4:body_start+204] if body_start != -1 else ''
+                if body_start != -1:
+                    body_bytes = payload[body_start+4:]
+                    body = PacketParser._format_http_body(body_bytes, content_type)
+                else:
+                    body = ''
                 
                 return {
                     'type': 'HTTP_REQUEST',
@@ -671,7 +679,8 @@ class PacketParser:
                     'path': path,
                     'version': version,
                     'headers': headers[:10],  # First 10 headers
-                    'body': body[:200] if body else ''  # First 200 chars of body
+                    'body': body,
+                    'content_type': content_type
                 }
             
             # HTTP Response: "HTTP/1.1 200 OK"
@@ -682,14 +691,29 @@ class PacketParser:
                 status_text = parts[2] if len(parts) > 2 else ''
                 
                 headers = []
+                content_type = None
+                content_length = None
                 for line in lines[1:]:
                     if line == '':
                         break
                     if ':' in line:
                         headers.append(line)
+                        # Check for Content-Type and Content-Length
+                        line_lower = line.lower()
+                        if line_lower.startswith('content-type:'):
+                            content_type = line.split(':', 1)[1].strip()
+                        elif line_lower.startswith('content-length:'):
+                            try:
+                                content_length = int(line.split(':', 1)[1].strip())
+                            except:
+                                pass
                 
                 body_start = text.find('\r\n\r\n')
-                body = text[body_start+4:body_start+204] if body_start != -1 else ''
+                if body_start != -1:
+                    body_bytes = payload[body_start+4:]
+                    body = PacketParser._format_http_body(body_bytes, content_type, content_length)
+                else:
+                    body = ''
                 
                 return {
                     'type': 'HTTP_RESPONSE',
@@ -697,10 +721,56 @@ class PacketParser:
                     'status_code': status_code,
                     'status_text': status_text,
                     'headers': headers[:10],
-                    'body': body[:200] if body else ''
+                    'body': body,
+                    'content_type': content_type
                 }
         except:
             pass
         
         return None
+    
+    @staticmethod
+    def _format_http_body(body_bytes, content_type, content_length=None):
+        """
+        Format HTTP body for display, detecting binary vs text content.
+        
+        Args:
+            body_bytes: Raw body bytes
+            content_type: Content-Type header value
+            content_length: Content-Length header value
+            
+        Returns:
+            Formatted string for display
+        """
+        if not body_bytes:
+            return ''
+        
+        # Detect binary content types
+        binary_types = [
+            'image/', 'video/', 'audio/', 'application/octet-stream',
+            'application/pdf', 'application/zip', 'font/', 'application/x-'
+        ]
+        
+        is_binary = False
+        if content_type:
+            is_binary = any(content_type.lower().startswith(bt) for bt in binary_types)
+        
+        # Also check if data looks binary (lots of non-printable chars)
+        if not is_binary and len(body_bytes) > 0:
+            non_printable = sum(1 for b in body_bytes[:100] if b < 32 and b not in [9, 10, 13])
+            if non_printable > len(body_bytes[:100]) * 0.3:  # >30% non-printable
+                is_binary = True
+        
+        if is_binary:
+            # Show binary indicator
+            type_desc = content_type if content_type else "unknown type"
+            size = content_length if content_length else len(body_bytes)
+            return f"[Binary content: {type_desc}, {size} bytes]\n\nHex preview (first 64 bytes):\n{body_bytes[:64].hex(' ', 2)}"
+        else:
+            # Show text content
+            try:
+                text = body_bytes.decode('utf-8', errors='replace')
+                return text[:500] if text else ''  # First 500 chars
+            except:
+                return body_bytes.decode('ascii', errors='ignore')[:500]
 
