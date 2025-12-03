@@ -115,13 +115,29 @@ class AccessPointsTab(ttk.Frame):
         )
         title_label.pack(pady=(0, 20))
         
-        # Details
+         
+        # Calculate channel information
+        channel = data.get('channel', 0)
+        signal = data.get('signal', -100)
+        center_freq = self._channel_to_frequency(channel)
+        distance = self._estimate_distance(signal, center_freq)
+        bandwidth = 20  # MHz (standard for 2.4 GHz)
+        start_freq = center_freq - (bandwidth / 2)
+        end_freq = center_freq + (bandwidth / 2)
+        signal_quality = self._signal_quality(signal)
+        
         details = [
+            ("SSID:", data.get('ssid', 'Unknown')),
             ("BSSID (MAC):", data.get('bssid', 'Unknown')),
             ("Vendor:", get_vendor(data.get('bssid', ''))),
-            ("Signal Strength:", f"{data.get('signal', -100)} dBm"),
-            ("Channel:", str(data.get('channel', 'Unknown'))),
-            ("Frequency:", f"{get_frequency(data.get('channel', 0))} MHz"),
+            ("", ""),  # Spacer
+            ("Channel:", f"{channel} ({center_freq} MHz) | Est. Distance: ~{distance:.0f}m"),
+            ("Bandwidth:", f"{bandwidth} MHz ({start_freq:.0f}-{end_freq:.0f} MHz)"),
+            ("Band:", "2.4 GHz"),
+            ("", ""),  # Spacer
+            ("Signal Strength:", f"{signal} dBm"),
+            ("Signal Quality:", signal_quality),
+            ("", ""),  # Spacer
             ("Security:", data.get('security', 'Unknown')),
         ]
         
@@ -264,3 +280,72 @@ class AccessPointsTab(ttk.Frame):
                 widgets['bssid'].config(text=f"{bssid} ({vendor})")
                 widgets['details'].config(text=f"CH {channel}  {freq}MHz  {crypto}", fg=color)
                 widgets['signal'].config(text=f"{signal} dBm", fg=color)
+
+    def _channel_to_frequency(self, channel):
+        """Convert 2.4 GHz channel number to center frequency in MHz"""
+        if 1 <= channel <= 13:
+            return 2407 + (channel * 5)
+        elif channel == 14:
+            return 2484  # Special case for Japan
+        return 0
+
+    def _estimate_distance(self, signal_dbm, frequency_mhz):
+        """
+        Estimate distance from signal strength using a practical indoor model
+        
+        Uses a simplified log-distance path loss model adjusted for indoor environments:
+          PL(d) = PL(d0) + 10*n*log10(d/d0)
+        Where:
+          n = path loss exponent (2.0 for free space, 3.0-4.0 for indoor)
+        
+        Assumptions:
+          - TX power: ~15 dBm (realistic for most WiFi APs at antenna)
+          - Path loss exponent: 2.5 (typical indoor environment)
+          - Reference distance: 1 meter
+        
+        Note: This is an approximation. Actual distance varies with:
+          - Walls, furniture, and obstacles
+          - Interference and multipath
+          - Antenna characteristics
+        """
+        import math
+        
+        # More realistic TX power for indoor WiFi APs
+        # (accounts for actual antenna output, not regulatory max)
+        TX_POWER = 15  # dBm
+        
+        # Path loss at reference distance (1 meter) for 2.4 GHz
+        # Using FSPL: PL(1m) = 20*log10(frequency) + 20*log10(1) + 32.45 - 20*log10(c/f)
+        freq_ghz = frequency_mhz / 1000.0
+        if freq_ghz > 0:
+            PL_1m = 20 * math.log10(freq_ghz) + 32.45
+        else:
+            return 0
+        
+        # Actual path loss from signal strength
+        path_loss = TX_POWER - signal_dbm
+        
+        # Path loss exponent (2.0 = free space, 3.0-4.0 = indoor with obstacles)
+        # Using 2.5 as a middle ground for typical indoor environment
+        n = 2.5
+        
+        # Solve for distance: PL(d) = PL(1m) + 10*n*log10(d)
+        # d = 10^((PL(d) - PL(1m)) / (10*n))
+        if path_loss > PL_1m:
+            distance = 10 ** ((path_loss - PL_1m) / (10 * n))
+            return max(1, distance)  # Minimum 1 meter
+        else:
+            return 1  # Very close, minimum 1 meter
+
+    def _signal_quality(self, signal_dbm):
+        """Describe signal quality based on signal strength"""
+        if signal_dbm >= -50:
+            return "Excellent"
+        elif signal_dbm >= -60:
+            return "Good"
+        elif signal_dbm >= -70:
+            return "Fair"
+        elif signal_dbm >= -80:
+            return "Weak"
+        else:
+            return "Very Weak"
