@@ -1,7 +1,6 @@
 import threading
 import subprocess
 import time
-import os
 
 class ChannelHopper(threading.Thread):
     def __init__(self, interface, interval=0.5):

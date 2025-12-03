@@ -1,7 +1,6 @@
 import socket
 import threading
 import sys
-from utils.constants import ETH_P_ALL
 
 class Sniffer(threading.Thread):
     def __init__(self, interface, callback):
