@@ -102,20 +102,24 @@ class SnifferTab(ttk.Frame):
         )
         self.hopper_status.pack(side=tk.LEFT, padx=10)
         
-        # Treeview
-        columns = ('time', 'src', 'dst', 'proto', 'info')
+        # Treeview with enhanced columns
+        columns = ('time', 'src_mac', 'src_ip', 'dst_mac', 'dst_ip', 'proto', 'info')
         self.tree = ttk.Treeview(self, columns=columns, show='headings')
         self.tree.heading('time', text='Time')
-        self.tree.heading('src', text='Source')
-        self.tree.heading('dst', text='Destination')
+        self.tree.heading('src_mac', text='Src MAC')
+        self.tree.heading('src_ip', text='Src IP')
+        self.tree.heading('dst_mac', text='Dst MAC')
+        self.tree.heading('dst_ip', text='Dst IP')
         self.tree.heading('proto', text='Protocol')
         self.tree.heading('info', text='Info')
         
-        self.tree.column('time', width=80)
-        self.tree.column('src', width=120)
-        self.tree.column('dst', width=120)
+        self.tree.column('time', width=70)
+        self.tree.column('src_mac', width=130)
+        self.tree.column('src_ip', width=100)
+        self.tree.column('dst_mac', width=130)
+        self.tree.column('dst_ip', width=100)
         self.tree.column('proto', width=60)
-        self.tree.column('info', width=400)
+        self.tree.column('info', width=300)
         
         # Scrollbar
         scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.tree.yview)
@@ -175,12 +179,11 @@ class SnifferTab(ttk.Frame):
         
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         
-        src = packet_info.get('src_ip', 'N/A')
-        dst = packet_info.get('dst_ip', 'N/A')
-        
-        # Fallback to MAC if IP is N/A
-        if src == 'N/A': src = packet_info.get('src_mac', 'N/A')
-        if dst == 'N/A': dst = packet_info.get('dst_mac', 'N/A')
+        # Extract MAC and IP addresses separately
+        src_mac = packet_info.get('src_mac', 'N/A')
+        src_ip = packet_info.get('src_ip', 'N/A')
+        dst_mac = packet_info.get('dst_mac', 'N/A')
+        dst_ip = packet_info.get('dst_ip', 'N/A')
         
         proto = packet_info.get('type', 'Unknown')
         
@@ -201,8 +204,10 @@ class SnifferTab(ttk.Frame):
         # Insert into tree
         item_id = self.tree.insert("", 0, values=(
             timestamp,
-            src,
-            dst,
+            src_mac,
+            src_ip,
+            dst_mac,
+            dst_ip,
             proto,
             info
         ))
@@ -287,6 +292,16 @@ class SnifferTab(ttk.Frame):
         notebook = ttk.Notebook(dialog)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # Statistics Tab (first)
+        stats_frame = tk.Frame(notebook, bg="#2b2b2b")
+        notebook.add(stats_frame, text="📊 Statistics")
+        self._add_statistics_tab(stats_frame, packet_info)
+        
+        # Ethernet/MAC Tab (always present)
+        eth_frame = tk.Frame(notebook, bg="#2b2b2b")
+        notebook.add(eth_frame, text="Ethernet/MAC")
+        self._add_ethernet_tab(eth_frame, packet_info)
+        
         # Summary Tab
         summary_frame = tk.Frame(notebook, bg="#2b2b2b")
         notebook.add(summary_frame, text="Summary")
@@ -315,6 +330,12 @@ class SnifferTab(ttk.Frame):
             icmp_frame = tk.Frame(notebook, bg="#2b2b2b")
             notebook.add(icmp_frame, text="ICMP Header")
             self._add_icmp_tab(icmp_frame, packet_info)
+        
+        # WiFi Metadata Tab (if available - monitor mode)
+        if packet_info.get('radiotap_signal') or packet_info.get('bssid'):
+            wifi_frame = tk.Frame(notebook, bg="#2b2b2b")
+            notebook.add(wifi_frame, text="WiFi Metadata")
+            self._add_wifi_metadata_tab(wifi_frame, packet_info)
         
         # HTTP Payload Tab (if present)
         if 'http' in packet_info:
@@ -392,15 +413,39 @@ It provides best-effort delivery without guarantees of reliability or ordering.
         tcp_details = f"""TCP HEADER
 ==========
 
-Source Port: {packet_info.get('src_port', 'N/A')}
-Destination Port: {packet_info.get('dst_port', 'N/A')}
-Sequence Number: {packet_info.get('tcp_seq_num', 'N/A')}
-Acknowledgment Number: {packet_info.get('tcp_ack_num', 'N/A')}
-Data Offset: {packet_info.get('tcp_data_offset', 'N/A')} (Header Length: {packet_info.get('tcp_header_length', 'N/A')} bytes)
+Connection:
+  Source Port: {packet_info.get('src_port', 'N/A')}
+  Destination Port: {packet_info.get('dst_port', 'N/A')}
+  Service: {self._get_service_name(packet_info.get('dst_port'))}
+
+Sequence Control:
+  Sequence Number: {packet_info.get('tcp_seq_num', 'N/A')}
+  Acknowledgment Number: {packet_info.get('tcp_ack_num', 'N/A')}
+
+Header Information:
+  Data Offset: {packet_info.get('tcp_data_offset', 'N/A')}
+  Header Length: {packet_info.get('tcp_header_length', 'N/A')} bytes
+  Payload Length: {len(packet_info.get('payload', b''))} bytes
+
 Flags: {packet_info.get('tcp_flags_str', 'N/A')} (0x{packet_info.get('tcp_flags', 0):02x})
-Window Size: {packet_info.get('tcp_window_size', 'N/A')} bytes
-Checksum: {packet_info.get('tcp_checksum', 'N/A')}
-Urgent Pointer: {packet_info.get('tcp_urgent_pointer', 'N/A')}
+  ├─ FIN: {"✓" if packet_info.get('tcp_flags', 0) & 0x01 else "✗"} (Close connection)
+  ├─ SYN: {"✓" if packet_info.get('tcp_flags', 0) & 0x02 else "✗"} (Start connection)
+  ├─ RST: {"✓" if packet_info.get('tcp_flags', 0) & 0x04 else "✗"} (Reset connection)
+  ├─ PSH: {"✓" if packet_info.get('tcp_flags', 0) & 0x08 else "✗"} (Push data immediately)
+  ├─ ACK: {"✓" if packet_info.get('tcp_flags', 0) & 0x10 else "✗"} (Acknowledge receipt)
+  ├─ URG: {"✓" if packet_info.get('tcp_flags', 0) & 0x20 else "✗"} (Urgent data)
+  ├─ ECE: {"✓" if packet_info.get('tcp_flags', 0) & 0x40 else "✗"} (ECN Echo)
+  └─ CWR: {"✓" if packet_info.get('tcp_flags', 0) & 0x80 else "✗"} (Congestion Window Reduced)
+
+Flow Control:
+  Window Size: {packet_info.get('tcp_window_size', 'N/A')} bytes
+  Urgent Pointer: {packet_info.get('tcp_urgent_pointer', 'N/A')}
+
+Integrity:
+  Checksum: {packet_info.get('tcp_checksum', 'N/A')}
+
+Connection State (based on flags):
+  {self._analyze_tcp_state(packet_info)}
 
 Purpose: TCP provides reliable, ordered, error-checked delivery of data between applications.
 It uses sequence numbers to ensure all data arrives and in correct order.
@@ -510,3 +555,231 @@ Headers:
         
         text.insert(tk.END, http_details)
         text.config(state=tk.DISABLED)
+
+    def _add_statistics_tab(self, parent, packet_info):
+        """Show packet statistics"""
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 10), wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(parent, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
+        
+        stats = f"""PACKET STATISTICS
+=================
+
+Capture Information:
+  Timestamp: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]}
+  Packet Number: #{len(self.packet_data)}
+  
+Layer Breakdown:
+  ├─ Link Layer (Ethernet/802.11): {"✓" if packet_info.get('src_mac') else "✗"}
+  ├─ Network Layer (IP): {"✓" if packet_info.get('src_ip') else "✗"}
+  ├─ Transport Layer (TCP/UDP/ICMP): {"✓" if packet_info.get('type') in ['TCP','UDP','ICMP'] else "✗"}
+  └─ Application Layer (HTTP/etc): {"✓" if packet_info.get('http') else "✗"}
+
+Packet Size:
+  Total Length: {packet_info.get('ip_total_length', 'N/A')} bytes
+  Header Overhead: {self._calculate_header_overhead(packet_info)} bytes
+  Payload: {len(packet_info.get('payload', b''))} bytes
+
+Protocol Stack:
+{self._build_protocol_stack(packet_info)}
+"""
+        text.insert(tk.END, stats)
+        text.config(state=tk.DISABLED)
+
+    def _add_ethernet_tab(self, parent, packet_info):
+        """Add Ethernet/MAC layer details"""
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(parent, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
+        
+        eth_details = f"""ETHERNET / MAC LAYER
+====================
+
+Source MAC Address: {packet_info.get('src_mac', 'N/A')}
+  Vendor (OUI): {self._get_mac_vendor(packet_info.get('src_mac', ''))}
+  
+Destination MAC Address: {packet_info.get('dst_mac', 'N/A')}
+  Vendor (OUI): {self._get_mac_vendor(packet_info.get('dst_mac', ''))}
+  Type: {self._get_mac_type(packet_info.get('dst_mac', ''))}
+
+EtherType: {packet_info.get('ethertype', 'N/A')} 
+  Name: {packet_info.get('ethertype_name', 'Unknown')}
+
+Common EtherTypes:
+  0x0800 - IPv4 (Internet Protocol)
+  0x0806 - ARP (Address Resolution Protocol)
+  0x86DD - IPv6
+  0x8100 - VLAN (802.1Q)
+
+MAC Address Types:
+  - Unicast: Sent to specific device
+  - Broadcast: FF:FF:FF:FF:FF:FF (all devices on network)
+  - Multicast: First byte odd (e.g., 01:00:5E:xx:xx:xx)
+
+Purpose: The Ethernet layer provides local network delivery using hardware
+addresses (MAC addresses). It operates at Layer 2 of the OSI model.
+"""
+        text.insert(tk.END, eth_details)
+        text.config(state=tk.DISABLED)
+
+    def _add_wifi_metadata_tab(self, parent, packet_info):
+        """Add WiFi-specific metadata"""
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(parent, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
+        
+        wifi_details = f"""WIFI METADATA
+=============
+
+Capture Mode: {"Monitor Mode" if packet_info.get('radiotap_signal') else "Managed Mode"}
+
+"""
+        
+        # Radiotap info (if available)
+        if packet_info.get('radiotap_signal'):
+            wifi_details += f"""Radiotap Information:
+  Signal Strength: {packet_info.get('radiotap_signal', 'N/A')} dBm
+  Channel Frequency: {packet_info.get('channel_freq', 'N/A')} MHz
+  Channel Number: {packet_info.get('channel', 'N/A')}
+  Data Rate: {packet_info.get('data_rate', 'N/A')} Mbps
+
+Signal Quality:
+  {self._analyze_signal_strength(packet_info.get('radiotap_signal', -100))}
+
+"""
+        
+        # 802.11 info (if available)
+        if packet_info.get('bssid'):
+            wifi_details += f"""802.11 Frame Information:
+  Access Point (BSSID): {packet_info.get('bssid', 'N/A')}
+  Network Name (SSID): {packet_info.get('ssid', 'N/A')}
+  Frame Type: {packet_info.get('frame_type', 'N/A')}
+  To DS: {packet_info.get('to_ds', 'N/A')}
+  From DS: {packet_info.get('from_ds', 'N/A')}
+"""
+        
+        wifi_details += """
+Purpose: WiFi metadata provides information about the wireless transmission,
+including signal quality and Access Point details.
+"""
+        
+        text.insert(tk.END, wifi_details)
+        text.config(state=tk.DISABLED)
+
+    # Helper methods
+    def _get_service_name(self, port):
+        """Map port to service name"""
+        if not port:
+            return "N/A"
+        services = {
+            20: "FTP Data", 21: "FTP Control",
+            22: "SSH", 23: "Telnet",
+            25: "SMTP", 53: "DNS",
+            80: "HTTP", 443: "HTTPS",
+            110: "POP3", 143: "IMAP",
+            3306: "MySQL", 5432: "PostgreSQL",
+            3389: "RDP", 5900: "VNC",
+            8080: "HTTP Proxy", 8443: "HTTPS Alt"
+        }
+        service = services.get(port, f"Port {port}")
+        return f"{service} ({port})"
+
+    def _get_mac_vendor(self, mac):
+        """Get vendor from MAC OUI"""
+        if mac and len(mac) >= 8 and mac != "N/A":
+            try:
+                from utils.oui import get_vendor
+                vendor = get_vendor(mac)
+                return vendor if vendor else "Unknown Vendor"
+            except:
+                return "Unknown"
+        return "N/A"
+
+    def _get_mac_type(self, mac):
+        """Determine MAC address type"""
+        if not mac or mac == "N/A":
+            return "Unknown"
+        if mac == "FF:FF:FF:FF:FF:FF":
+            return "Broadcast"
+        try:
+            first_byte = int(mac.split(':')[0], 16)
+            if first_byte & 1:
+                return "Multicast"
+            return "Unicast"
+        except:
+            return "Unknown"
+
+    def _analyze_tcp_state(self, packet_info):
+        """Analyze TCP connection state"""
+        flags = packet_info.get('tcp_flags', 0)
+        
+        if flags & 0x02 and not flags & 0x10:  # SYN only
+            return "→ Connection Request (SYN)"
+        elif flags & 0x02 and flags & 0x10:     # SYN+ACK
+            return "← Connection Accepted (SYN-ACK)"
+        elif flags & 0x10 and not any([flags & 0x01, flags & 0x04]):  # ACK only
+            return "↔ Established (ACK)"
+        elif flags & 0x01:                       # FIN
+            return "→ Closing Connection (FIN)"
+        elif flags & 0x04:                       # RST
+            return "✗ Connection Reset (RST)"
+        elif flags & 0x08:                       # PSH
+            return "⚡ Data Push (PSH+ACK)"
+        return "Active"
+
+    def _calculate_header_overhead(self, packet_info):
+        """Calculate total header bytes"""
+        overhead = 0
+        if packet_info.get('src_mac'):
+            overhead += 14  # Ethernet
+        if packet_info.get('ip_header_length'):
+            overhead += packet_info.get('ip_header_length', 20)
+        if packet_info.get('tcp_header_length'):
+            overhead += packet_info.get('tcp_header_length', 0)
+        elif packet_info.get('type') == 'UDP':
+            overhead += 8  # UDP header
+        elif packet_info.get('type') == 'ICMP':
+            overhead += 8  # ICMP header
+        return overhead if overhead > 0 else "N/A"
+
+    def _build_protocol_stack(self, packet_info):
+        """Build visual protocol stack"""
+        stack = []
+        if packet_info.get('src_mac'):
+            stack.append("  Ethernet II")
+        if packet_info.get('src_ip'):
+            stack.append("    └─ IPv4")
+            if packet_info.get('type') == 'TCP':
+                stack.append("       └─ TCP")
+                if packet_info.get('http'):
+                    stack.append("          └─ HTTP")
+            elif packet_info.get('type') == 'UDP':
+                stack.append("       └─ UDP")
+                service = packet_info.get('udp_service', '')
+                if service and service != "Unknown":
+                    stack.append(f"          └─ {service}")
+            elif packet_info.get('type') == 'ICMP':
+                stack.append("       └─ ICMP")
+        return '\n'.join(stack) if stack else "  No protocol stack available"
+
+    def _analyze_signal_strength(self, signal_dbm):
+        """Analyze WiFi signal strength"""
+        if signal_dbm >= -50:
+            return "Excellent (>= -50 dBm)"
+        elif signal_dbm >= -60:
+            return "Good (-50 to -60 dBm)"
+        elif signal_dbm >= -70:
+            return "Fair (-60 to -70 dBm)"
+        elif signal_dbm >= -80:
+            return "Weak (-70 to -80 dBm)"
+        else:
+            return "Very Weak (< -80 dBm)"
