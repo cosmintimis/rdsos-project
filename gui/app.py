@@ -5,11 +5,13 @@ from gui.channel_graph_tab import ChannelGraphTab
 from gui.sniffer_tab import SnifferTab
 
 class App(tk.Tk):
-    def __init__(self, queue):
+    def __init__(self, queue, interface=None, hopper=None):
         super().__init__()
         self.title("Manual WiFi Analyzer & Sniffer")
         self.geometry("900x700")
         self.queue = queue
+        self.interface = interface
+        self.hopper = hopper
         
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True)
@@ -17,7 +19,7 @@ class App(tk.Tk):
         # Create 3 top-level tabs
         self.access_points_tab = AccessPointsTab(self.notebook)
         self.channel_graph_tab = ChannelGraphTab(self.notebook)
-        self.sniffer_tab = SnifferTab(self.notebook)
+        self.sniffer_tab = SnifferTab(self.notebook, interface=interface, hopper=hopper)  # Pass interface
         
         self.notebook.add(self.access_points_tab, text="Access Points")
         self.notebook.add(self.channel_graph_tab, text="Channel Graph")

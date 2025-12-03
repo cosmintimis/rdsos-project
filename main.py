@@ -167,7 +167,7 @@ def main():
     # Start GUI
     print("[*] Initializing GUI...")
     try:
-        app = App(result_queue)
+        app = App(result_queue, interface=interface, hopper=hopper)  # Pass interface and hopper
         print("[*] GUI initialized. Starting mainloop...")
         app.mainloop()
     except KeyboardInterrupt:

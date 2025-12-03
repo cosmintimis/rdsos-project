@@ -1,10 +1,15 @@
 import tkinter as tk
 from tkinter import ttk
 import datetime
+import time
 
 class SnifferTab(ttk.Frame):
-    def __init__(self, parent):
+    def __init__(self, parent, interface=None, hopper=None):
         super().__init__(parent)
+        
+        # Store references
+        self.interface = interface
+        self.hopper = hopper
         
         # Pause state
         self.paused = False
@@ -21,7 +26,7 @@ class SnifferTab(ttk.Frame):
             controls_frame, 
             text="⏸ Pause Capture", 
             command=self.toggle_pause,
-            bg="#4CAF50",
+            bg="#FF9800",  # Orange initially (Active/Pauseable)
             fg="white",
             font=("Arial", 10, "bold"),
             relief=tk.FLAT,
@@ -50,11 +55,52 @@ class SnifferTab(ttk.Frame):
         )
         self.filter_dropdown.pack(side=tk.LEFT, padx=5)
         
-        # Channel lock controls
-        tk.Label(controls_frame, text="Lock Channel:").pack(side=tk.LEFT, padx=(20, 0))
+        # Channel controls frame
+        channel_frame = tk.Frame(controls_frame)
+        channel_frame.pack(side=tk.LEFT, padx=(20, 0))
+        
+        tk.Label(channel_frame, text="Channel:", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self.channel_var = tk.StringVar()
-        tk.Entry(controls_frame, textvariable=self.channel_var, width=5).pack(side=tk.LEFT, padx=5)
-        tk.Button(controls_frame, text="Set", command=self.set_channel).pack(side=tk.LEFT)
+        self.channel_entry = tk.Entry(channel_frame, textvariable=self.channel_var, width=5)
+        self.channel_entry.pack(side=tk.LEFT, padx=2)
+        
+        self.lock_btn = tk.Button(
+            channel_frame, 
+            text="Lock", 
+            command=self.set_channel,
+            bg="#FF9800",
+            fg="white",
+            font=("Arial", 9, "bold"),
+            relief=tk.FLAT,
+            padx=8,
+            pady=3,
+            cursor="hand2"
+        )
+        self.lock_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.resume_hop_btn = tk.Button(
+            channel_frame, 
+            text="Resume Hopping", 
+            command=self.resume_hopping,
+            bg="#2196F3",
+            fg="white",
+            font=("Arial", 9, "bold"),
+            relief=tk.FLAT,
+            padx=8,
+            pady=3,
+            cursor="hand2",
+            state=tk.DISABLED  # Initially disabled (hopping by default)
+        )
+        self.resume_hop_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Hopper status label
+        self.hopper_status = tk.Label(
+            controls_frame, 
+            text="● Hopping" if hopper else "● Managed Mode",
+            fg="#4CAF50" if hopper else "#888888",
+            font=("Arial", 9)
+        )
+        self.hopper_status.pack(side=tk.LEFT, padx=10)
         
         # Treeview
         columns = ('time', 'src', 'dst', 'proto', 'info')
@@ -70,8 +116,6 @@ class SnifferTab(ttk.Frame):
         self.tree.column('dst', width=120)
         self.tree.column('proto', width=60)
         self.tree.column('info', width=400)
-        
-        self.tree.pack(fill=tk.BOTH, expand=True)
         
         # Scrollbar
         scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.tree.yview)
@@ -91,12 +135,12 @@ class SnifferTab(ttk.Frame):
         if self.paused:
             self.pause_btn.config(
                 text="▶ Resume Capture",
-                bg="#FF5722"  # Red/orange when paused
+                bg="#4CAF50"  # Green for Resume (Go)
             )
         else:
             self.pause_btn.config(
                 text="⏸ Pause Capture",
-                bg="#4CAF50"  # Green when active
+                bg="#FF9800"  # Orange for Pause (Stop/Wait)
             )
 
     def add_packet(self, packet_info):
@@ -172,6 +216,56 @@ class SnifferTab(ttk.Frame):
             self.packet_data.pop(oldest, None)
             self.tree.delete(oldest)
 
+    def set_channel(self):
+        """Lock to specific channel and stop hopper"""
+        ch = self.channel_var.get()
+        if ch.isdigit():
+            import subprocess
+            
+            # Stop the hopper if it's running
+            if self.hopper and self.hopper.running:
+                print(f"[*] Stopping channel hopper...")
+                self.hopper.stop()
+            
+            # Always enable resume button if we have an interface (we are now in locked mode)
+            if self.interface:
+                self.hopper_status.config(text="● Locked", fg="#FF9800")
+                self.resume_hop_btn.config(state=tk.NORMAL)
+            
+            # Lock to channel
+            print(f"[*] Locking to channel {ch}")
+            if_name = self.interface if self.interface else "wlan0"
+            subprocess.run(["iwconfig", if_name, "channel", ch])
+
+    def resume_hopping(self):
+        """Resume channel hopping"""
+        if self.interface:
+            try:
+                # Stop old hopper if running
+                if self.hopper and self.hopper.running:
+                    self.hopper.stop()
+                    time.sleep(0.1)
+                
+                # Create NEW hopper thread
+                from core.hopper import ChannelHopper
+                print(f"[*] Resuming channel hopping on {self.interface}...")
+                
+                self.hopper = ChannelHopper(self.interface)
+                self.hopper.start()
+                
+                # Update parent app's hopper reference
+                if hasattr(self.master.master, 'hopper'):
+                    self.master.master.hopper = self.hopper
+                
+                # Update UI
+                self.hopper_status.config(text="● Hopping", fg="#4CAF50")
+                self.resume_hop_btn.config(state=tk.DISABLED)
+                self.channel_var.set("")
+            except Exception as e:
+                print(f"[!] Error resuming hopper: {e}")
+        else:
+            print("[!] Cannot resume hopping: Interface unknown")
+
     def show_packet_details(self, event):
         """Show detailed packet information in a dialog"""
         selection = self.tree.selection()
@@ -211,13 +305,13 @@ class SnifferTab(ttk.Frame):
             self._add_tcp_tab(tcp_frame, packet_info)
         
         # UDP Header Tab (if present)
-        if 'udp_length' in packet_info:
+        if packet_info.get('type') == 'UDP':
             udp_frame = tk.Frame(notebook, bg="#2b2b2b")
             notebook.add(udp_frame, text="UDP Header")
             self._add_udp_tab(udp_frame, packet_info)
         
         # ICMP Header Tab (if present)
-        if 'icmp_type' in packet_info:
+        if packet_info.get('type') == 'ICMP':
             icmp_frame = tk.Frame(notebook, bg="#2b2b2b")
             notebook.add(icmp_frame, text="ICMP Header")
             self._add_icmp_tab(icmp_frame, packet_info)
@@ -229,64 +323,71 @@ class SnifferTab(ttk.Frame):
             self._add_http_tab(http_frame, packet_info['http'])
 
     def _add_summary_tab(self, parent, packet_info):
-        """Add summary information"""
+        """Add summary of packet"""
         text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 10), wrap=tk.WORD)
-        text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar = ttk.Scrollbar(parent, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
         
         summary = f"""PACKET SUMMARY
-================
+==============
 
 Type: {packet_info.get('type', 'Unknown')}
+Time: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
 Source: {packet_info.get('src_ip', packet_info.get('src_mac', 'N/A'))}
 Destination: {packet_info.get('dst_ip', packet_info.get('dst_mac', 'N/A'))}
-Protocol: {packet_info.get('ip_protocol_name', 'N/A')}
-Info: {packet_info.get('info', '')}
+
+Info: {packet_info.get('info', 'No additional info')}
 """
+        
         text.insert(tk.END, summary)
         text.config(state=tk.DISABLED)
 
     def _add_ip_tab(self, parent, packet_info):
         """Add IP header details"""
-        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.NONE)
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.WORD)
         scrollbar = ttk.Scrollbar(parent, command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)
         
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
         
-        ip_details = f"""IPv4 HEADER
-===========
+        ip_details = f"""IP HEADER
+=========
 
 Version: {packet_info.get('ip_version', 'N/A')}
-Header Length (IHL): {packet_info.get('ip_ihl', 'N/A')} ({packet_info.get('ip_header_length', 'N/A')} bytes)
-DSCP: {packet_info.get('ip_dscp', 'N/A')}
-ECN: {packet_info.get('ip_ecn', 'N/A')}
+Header Length: {packet_info.get('ip_header_length', 'N/A')} bytes
+Type of Service (ToS): {packet_info.get('ip_tos', 'N/A')}
+  - DSCP: {packet_info.get('ip_dscp', 'N/A')}
+  - ECN: {packet_info.get('ip_ecn', 'N/A')}
 Total Length: {packet_info.get('ip_total_length', 'N/A')} bytes
 Identification: {packet_info.get('ip_identification', 'N/A')}
-Flags:
-  - Don't Fragment (DF): {packet_info.get('ip_flag_df', False)}
-  - More Fragments (MF): {packet_info.get('ip_flag_mf', False)}
+Flags: {packet_info.get('ip_flags', 'N/A')}
 Fragment Offset: {packet_info.get('ip_fragment_offset', 'N/A')}
 Time to Live (TTL): {packet_info.get('ip_ttl', 'N/A')}
-Protocol: {packet_info.get('ip_protocol', 'N/A')} ({packet_info.get('ip_protocol_name', 'N/A')})
+Protocol: {packet_info.get('ip_protocol', 'N/A')} ({packet_info.get('ip_protocol_name', 'Unknown')})
 Header Checksum: {packet_info.get('ip_checksum', 'N/A')}
 Source IP: {packet_info.get('src_ip', 'N/A')}
 Destination IP: {packet_info.get('dst_ip', 'N/A')}
+
+Purpose: The IP header routes packets across networks using logical addressing.
+It provides best-effort delivery without guarantees of reliability or ordering.
 """
+        
         text.insert(tk.END, ip_details)
         text.config(state=tk.DISABLED)
 
     def _add_tcp_tab(self, parent, packet_info):
         """Add TCP header details"""
-        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.NONE)
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.WORD)
         scrollbar = ttk.Scrollbar(parent, command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)
         
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
-        
-        tcp_flags = packet_info.get('tcp_flags', {})
-        flags_detail = "\n".join([f"  - {flag}: {value}" for flag, value in tcp_flags.items()])
         
         tcp_details = f"""TCP HEADER
 ==========
@@ -295,26 +396,27 @@ Source Port: {packet_info.get('src_port', 'N/A')}
 Destination Port: {packet_info.get('dst_port', 'N/A')}
 Sequence Number: {packet_info.get('tcp_seq_num', 'N/A')}
 Acknowledgment Number: {packet_info.get('tcp_ack_num', 'N/A')}
-Data Offset: {packet_info.get('tcp_data_offset', 'N/A')} ({packet_info.get('tcp_header_length', 'N/A')} bytes)
-Flags: [{packet_info.get('tcp_flags_str', 'N/A')}]
-{flags_detail}
+Data Offset: {packet_info.get('tcp_data_offset', 'N/A')} (Header Length: {packet_info.get('tcp_header_length', 'N/A')} bytes)
+Flags: {packet_info.get('tcp_flags_str', 'N/A')} (0x{packet_info.get('tcp_flags', 0):02x})
 Window Size: {packet_info.get('tcp_window_size', 'N/A')} bytes
 Checksum: {packet_info.get('tcp_checksum', 'N/A')}
 Urgent Pointer: {packet_info.get('tcp_urgent_pointer', 'N/A')}
+
+Purpose: TCP provides reliable, ordered, error-checked delivery of data between applications.
+It uses sequence numbers to ensure all data arrives and in correct order.
 """
+        
         text.insert(tk.END, tcp_details)
         text.config(state=tk.DISABLED)
 
     def _add_udp_tab(self, parent, packet_info):
         """Add UDP header details"""
-        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.NONE)
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.WORD)
         scrollbar = ttk.Scrollbar(parent, command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)
         
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
-        
-        service = packet_info.get('udp_service', '')
         
         udp_details = f"""UDP HEADER
 ==========
@@ -323,46 +425,41 @@ Source Port: {packet_info.get('src_port', 'N/A')}
 Destination Port: {packet_info.get('dst_port', 'N/A')}
 Length: {packet_info.get('udp_length', 'N/A')} bytes
 Checksum: {packet_info.get('udp_checksum', 'N/A')}
-Service: {service if service else 'Unknown'}
 
-Note: UDP is a connectionless protocol with no handshake,
-sequence numbers, or acknowledgments (unlike TCP).
+Service: {packet_info.get('udp_service', 'Unknown')}
+
+Purpose: UDP is a connectionless protocol for low-latency, loss-tolerating applications.
+Common uses: DNS, DHCP, streaming media, online gaming, VoIP.
 """
+        
         text.insert(tk.END, udp_details)
         text.config(state=tk.DISABLED)
 
     def _add_icmp_tab(self, parent, packet_info):
         """Add ICMP header details"""
-        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.NONE)
+        text = tk.Text(parent, bg="#1e1e1e", fg="white", font=("Courier", 9), wrap=tk.WORD)
         scrollbar = ttk.Scrollbar(parent, command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)
         
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
         
-        icmp_type = packet_info.get('icmp_type', 'N/A')
-        is_ping = icmp_type in [0, 8]
-        
         icmp_details = f"""ICMP HEADER
 ===========
 
-Type: {icmp_type} ({packet_info.get('icmp_type_name', 'Unknown')})
+Type: {packet_info.get('icmp_type', 'N/A')} ({packet_info.get('icmp_type_name', 'Unknown')})
 Code: {packet_info.get('icmp_code', 'N/A')}
 Checksum: {packet_info.get('icmp_checksum', 'N/A')}
 """
         
-        if is_ping:
+        # Add ping-specific info if present
+        if 'icmp_identifier' in packet_info:
             icmp_details += f"""
-Ping Details:
-  Identifier: {packet_info.get('icmp_identifier', 'N/A')}
-  Sequence Number: {packet_info.get('icmp_sequence', 'N/A')}
-
-Purpose: Used by 'ping' command to test network connectivity.
-Type 8 = Echo Request (ping sent)
-Type 0 = Echo Reply (response received)
+Identifier: {packet_info.get('icmp_identifier', 'N/A')}
+Sequence Number: {packet_info.get('icmp_sequence', 'N/A')}
 """
-        else:
-            icmp_details += """
+        
+        icmp_details += """
 Purpose: ICMP is used for network diagnostics and error reporting.
 Common uses: ping, traceroute, network unreachable messages.
 """
@@ -409,14 +506,7 @@ Headers:
                 http_details += f"  {header}\n"
             
             if http_info.get('body'):
-                http_details += f"\nBody (first 200 chars):\n{http_info['body']}\n"
+                http_details += f"\nBody (first 500 chars):\n{http_info['body']}\n"
         
         text.insert(tk.END, http_details)
         text.config(state=tk.DISABLED)
-
-    def set_channel(self):
-        ch = self.channel_var.get()
-        if ch.isdigit():
-            import subprocess
-            print(f"[*] Locking to channel {ch}")
-            subprocess.run(["iwconfig", "wlan0", "channel", ch])
