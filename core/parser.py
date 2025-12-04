@@ -78,7 +78,7 @@ class PacketParser:
             return radiotap_len, signal_strength
             
         except Exception as e:
-            # print(f"Radiotap Error: {e}")
+            print(f"Parse Radiotap Error: {e}")
             return 0, 0
 
     @staticmethod
