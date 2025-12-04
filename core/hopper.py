@@ -24,8 +24,7 @@ class ChannelHopper(threading.Thread):
 
     def set_channel(self, channel):
         try:
-            # Using iwconfig to set channel
-            # Ideally we should check if the interface is up and in monitor mode
+            #TODO: check if interface is up and in monitor mode 
             subprocess.run(
                 ["iwconfig", self.interface, "channel", str(channel)],
                 check=False,
