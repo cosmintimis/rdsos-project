@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 from utils.oui import get_vendor
-from utils.constants import get_frequency
+from utils.constants import get_frequency, get_signal_color
 
 class AccessPointsTab(ttk.Frame):
     def __init__(self, parent):
@@ -41,48 +41,52 @@ class AccessPointsTab(ttk.Frame):
             self.networks[bssid] = data
             self.update_list()
 
-    def get_signal_color(self, signal):
-        if signal >= -50:
-            return "#00ff00"  # Green
-        elif signal >= -70:
-            return "#ffff00"  # Yellow
-        else:
-            return "#ff0000"  # Red
-
     def draw_wifi_icon(self, canvas, x, y, size, color, signal):
-        """Draw WiFi icon with bars based on signal strength"""
-        # Calculate number of bars (1-4) based on signal
+        """Draw polished WiFi icon with wide arcs and small dot"""
+        # Calculate number of arcs (1-3) based on signal strength
         if signal >= -50:
-            bars = 4
-        elif signal >= -60:
-            bars = 3
+            num_arcs = 3  # Full signal
         elif signal >= -70:
-            bars = 2
+            num_arcs = 2  # Medium signal
         else:
-            bars = 1
+            num_arcs = 1  # Low signal
         
-        # Draw WiFi arcs from center
-        for i in range(4):
-            if i < bars:
-                bar_color = color
+        # Smaller base dot for cleaner look
+        dot_radius = size * 0.12
+        dot_y = y
+        
+        # Draw 3 wide curved arcs stacked vertically ABOVE the dot
+        for i in range(3):
+            # Determine if this arc should be active or dim
+            if i < num_arcs:
+                arc_color = color
+                arc_width = 2.5
             else:
-                bar_color = "#555555"  # Dim color for inactive bars
+                arc_color = "#555555"  # Dim inactive arcs
+                arc_width = 2
             
-            radius = (i + 1) * (size / 8)
-            arc_start = 225  # Start angle
-            arc_extent = 90  # Arc span
+            # Make arcs progressively wider and more spaced
+            # Larger multiplier = wider, more prominent arcs
+            arc_radius = size * (0.3 + i * 0.3)
+            arc_center_y = dot_y - dot_radius - (i + 1) * size * 0.18
             
+            # Draw arc with 100-degree span for wider curves
             canvas.create_arc(
-                x - radius, y - radius, x + radius, y + radius,
-                start=arc_start, extent=arc_extent,
-                outline=bar_color, width=2, style=tk.ARC
+                x - arc_radius, arc_center_y - arc_radius,
+                x + arc_radius, arc_center_y + arc_radius,
+                start=40,       # Start angle
+                extent=100,     # Wider arc span for more curve
+                outline=arc_color,
+                width=arc_width,
+                style=tk.ARC
             )
         
-        # Draw center dot
-        dot_size = size / 10
+        # Draw small solid base dot
         canvas.create_oval(
-            x - dot_size, y - dot_size, x + dot_size, y + dot_size,
-            fill=color, outline=color
+            x - dot_radius, dot_y - dot_radius,
+            x + dot_radius, dot_y + dot_radius,
+            fill=color,
+            outline=color
         )
 
     def show_detail_dialog(self, bssid):
@@ -194,7 +198,7 @@ class AccessPointsTab(ttk.Frame):
         bar_container.pack(fill=tk.X, pady=5)
         bar_container.pack_propagate(False)
         
-        bar_fill = tk.Frame(bar_container, bg=self.get_signal_color(signal))
+        bar_fill = tk.Frame(bar_container, bg=get_signal_color(signal))
         bar_fill.place(relwidth=signal_percent/100, relheight=1)
         
         # Close button
@@ -221,7 +225,7 @@ class AccessPointsTab(ttk.Frame):
             vendor = get_vendor(bssid)
             freq = get_frequency(channel)
             
-            color = self.get_signal_color(signal)
+            color = get_signal_color(signal)
             
             if bssid not in self.network_widgets:
                 # Create new card
@@ -232,10 +236,12 @@ class AccessPointsTab(ttk.Frame):
                 card.bind("<Button-1>", lambda e, b=bssid: self.show_detail_dialog(b))
                 card.configure(cursor="hand2")
                 
-                # WiFi Icon
-                icon_canvas = tk.Canvas(card, width=32, height=32, bg="#333333", highlightthickness=0)
-                icon_canvas.grid(row=0, column=0, rowspan=2, padx=5)
-                self.draw_wifi_icon(icon_canvas, 16, 16, 24, color, signal)
+                # WiFi icon on the left
+                icon_canvas = tk.Canvas(card, width=32, height=60, bg="#333333", highlightthickness=0)
+                icon_canvas.grid(row=0, column=0, rowspan=4, padx=(5, 10), pady=5, sticky="s")
+                
+                # Draw icon with base dot at bottom of canvas (y=55, near bottom of 60px canvas)
+                self.draw_wifi_icon(icon_canvas, 16, 55, 24, color, signal)
                 icon_canvas.bind("<Button-1>", lambda e, b=bssid: self.show_detail_dialog(b))
                 
                 # SSID
@@ -275,7 +281,7 @@ class AccessPointsTab(ttk.Frame):
                 # Update existing card
                 widgets = self.network_widgets[bssid]
                 widgets['icon'].delete("all")
-                self.draw_wifi_icon(widgets['icon'], 16, 16, 24, color, signal)
+                self.draw_wifi_icon(widgets['icon'], 16, 55, 24, color, signal)
                 widgets['ssid'].config(text=ssid)
                 widgets['bssid'].config(text=f"{bssid} ({vendor})")
                 widgets['details'].config(text=f"CH {channel}  {freq}MHz  {crypto}", fg=color)
@@ -338,14 +344,18 @@ class AccessPointsTab(ttk.Frame):
             return 1  # Very close, minimum 1 meter
 
     def _signal_quality(self, signal_dbm):
-        """Describe signal quality based on signal strength"""
-        if signal_dbm >= -50:
+        """Enhanced signal quality descriptions matching 7-tier color system"""
+        if signal_dbm >= -30:
+            return "Perfect"
+        elif signal_dbm >= -50:
             return "Excellent"
         elif signal_dbm >= -60:
             return "Good"
-        elif signal_dbm >= -70:
+        elif signal_dbm >= -67:
             return "Fair"
+        elif signal_dbm >= -70:
+            return "Light"
         elif signal_dbm >= -80:
             return "Weak"
         else:
-            return "Very Weak"
+            return "Poor"
