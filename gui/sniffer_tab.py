@@ -410,6 +410,19 @@ It provides best-effort delivery without guarantees of reliability or ordering.
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
         
+        
+        # Safely extract tcp_flags as an integer
+        tcp_flags_raw = packet_info.get("tcp_flags", 0)
+        if isinstance(tcp_flags_raw, int):
+            tcp_flags = tcp_flags_raw
+        elif isinstance(tcp_flags_raw, dict):
+            tcp_flags = 0
+        else:
+            try:
+                tcp_flags = int(tcp_flags_raw)
+            except:
+                tcp_flags = 0
+        
         tcp_details = f"""TCP HEADER
 ==========
 
@@ -427,15 +440,15 @@ Header Information:
   Header Length: {packet_info.get('tcp_header_length', 'N/A')} bytes
   Payload Length: {len(packet_info.get('payload', b''))} bytes
 
-Flags: {packet_info.get('tcp_flags_str', 'N/A')} (0x{packet_info.get('tcp_flags', 0):02x})
-  ├─ FIN: {"✓" if packet_info.get('tcp_flags', 0) & 0x01 else "✗"} (Close connection)
-  ├─ SYN: {"✓" if packet_info.get('tcp_flags', 0) & 0x02 else "✗"} (Start connection)
-  ├─ RST: {"✓" if packet_info.get('tcp_flags', 0) & 0x04 else "✗"} (Reset connection)
-  ├─ PSH: {"✓" if packet_info.get('tcp_flags', 0) & 0x08 else "✗"} (Push data immediately)
-  ├─ ACK: {"✓" if packet_info.get('tcp_flags', 0) & 0x10 else "✗"} (Acknowledge receipt)
-  ├─ URG: {"✓" if packet_info.get('tcp_flags', 0) & 0x20 else "✗"} (Urgent data)
-  ├─ ECE: {"✓" if packet_info.get('tcp_flags', 0) & 0x40 else "✗"} (ECN Echo)
-  └─ CWR: {"✓" if packet_info.get('tcp_flags', 0) & 0x80 else "✗"} (Congestion Window Reduced)
+Flags: {packet_info.get('tcp_flags_str', 'N/A')} (0x{tcp_flags:02x})
+  ├─ FIN: {"✓" if tcp_flags & 0x01 else "✗"} (Close connection)
+  ├─ SYN: {"✓" if tcp_flags & 0x02 else "✗"} (Start connection)
+  ├─ RST: {"✓" if tcp_flags & 0x04 else "✗"} (Reset connection)
+  ├─ PSH: {"✓" if tcp_flags & 0x08 else "✗"} (Push data immediately)
+  ├─ ACK: {"✓" if tcp_flags & 0x10 else "✗"} (Acknowledge receipt)
+  ├─ URG: {"✓" if tcp_flags & 0x20 else "✗"} (Urgent data)
+  ├─ ECE: {"✓" if tcp_flags & 0x40 else "✗"} (ECN Echo)
+  └─ CWR: {"✓" if tcp_flags & 0x80 else "✗"} (Congestion Window Reduced)
 
 Flow Control:
   Window Size: {packet_info.get('tcp_window_size', 'N/A')} bytes
@@ -733,21 +746,36 @@ including signal quality and Access Point details.
 
     def _analyze_tcp_state(self, packet_info):
         """Analyze TCP connection state"""
-        flags = packet_info.get('tcp_flags', 0)
-        
-        if flags & 0x02 and not flags & 0x10:  # SYN only
-            return "→ Connection Request (SYN)"
-        elif flags & 0x02 and flags & 0x10:     # SYN+ACK
-            return "← Connection Accepted (SYN-ACK)"
-        elif flags & 0x10 and not any([flags & 0x01, flags & 0x04]):  # ACK only
-            return "↔ Established (ACK)"
-        elif flags & 0x01:                       # FIN
-            return "→ Closing Connection (FIN)"
-        elif flags & 0x04:                       # RST
-            return "✗ Connection Reset (RST)"
-        elif flags & 0x08:                       # PSH
-            return "⚡ Data Push (PSH+ACK)"
-        return "Active"
+        try:
+            flags = packet_info.get('tcp_flags', 0)
+            
+            # Handle case where tcp_flags might be a dict or other non-integer type
+            if not isinstance(flags, int):
+                # Try to extract from dict if it's a dict, otherwise default to 0
+                if isinstance(flags, dict):
+                    flags = 0  # Can't analyze dict flags
+                else:
+                    try:
+                        flags = int(flags)
+                    except (ValueError, TypeError):
+                        flags = 0
+            
+            if flags & 0x02 and not flags & 0x10:  # SYN only
+                return "→ Connection Request (SYN)"
+            elif flags & 0x02 and flags & 0x10:     # SYN+ACK
+                return "← Connection Accepted (SYN-ACK)"
+            elif flags & 0x10 and not any([flags & 0x01, flags & 0x04]):  # ACK only
+                return "↔ Established (ACK)"
+            elif flags & 0x01:                       # FIN
+                return "→ Closing Connection (FIN)"
+            elif flags & 0x04:                       # RST
+                return "✗ Connection Reset (RST)"
+            elif flags & 0x08:                       # PSH
+                return "⚡ Data Push (PSH+ACK)"
+            return "Active"
+        except Exception as e:
+            return f"Error analyzing state: {str(e)}"
+
 
     def _calculate_header_overhead(self, packet_info):
         """Calculate total header bytes"""
