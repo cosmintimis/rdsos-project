@@ -610,7 +610,20 @@ Destination MAC Address: {packet_info.get('dst_mac', 'N/A')}
 
 EtherType: {packet_info.get('ethertype', 'N/A')} 
   Name: {packet_info.get('ethertype_name', 'Unknown')}
-
+"""
+        # Add VLAN details if present
+        vlan_id = packet_info.get('vlan_id')
+        if vlan_id is not None:
+            vlan_priority = packet_info.get('vlan_priority', 0)
+            priority_names = ['Best Effort', 'Background', 'Excellent Effort', 'Critical Apps',
+                            'Video (<100ms)', 'Video (<10ms)', 'Internetwork Control', 'Network Control']
+            priority_name = priority_names[vlan_priority] if vlan_priority < 8 else 'Unknown'
+            eth_details += f"""
+VLAN Information (802.1Q):
+  VLAN ID: {vlan_id}
+  VLAN Priority: {vlan_priority} ({priority_name})
+"""
+        eth_details += """
 Common EtherTypes:
   0x0800 - IPv4 (Internet Protocol)
   0x0806 - ARP (Address Resolution Protocol)

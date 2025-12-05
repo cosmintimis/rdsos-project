@@ -471,7 +471,7 @@ class PacketParser:
                 # Managed Mode - Parse Complete Ethernet Frame
                 if len(data) < 14: return None
                 
-                # Ethernet II Frame Header (14 bytes)
+                # Ethernet II Frame Header (14 bytes minimum)
                 # Destination MAC (6 bytes)
                 dst_mac_bytes = data[0:6]
                 dst_mac = ':'.join('%02x' % b for b in dst_mac_bytes)
@@ -480,21 +480,39 @@ class PacketParser:
                 src_mac_bytes = data[6:12]
                 src_mac = ':'.join('%02x' % b for b in src_mac_bytes)
                 
-                # EtherType (2 bytes)
+                # EtherType / 802.1Q VLAN tag (2 bytes)
                 ethertype = struct.unpack('!H', data[12:14])[0]
                 
-                # EtherType mappings
+                vlan_id = None
+                vlan_priority = None
+                ip_offset = 14
+                
+                # Check for 802.1Q VLAN tag (0x8100)
+                if ethertype == 0x8100:
+                    if len(data) < 18: return None
+                    # VLAN tag: TCI (2 bytes) + EtherType (2 bytes)
+                    # TCI = Priority (3 bits) + DEI (1 bit) + VLAN ID (12 bits)
+                    tci = struct.unpack('!H', data[14:16])[0]
+                    vlan_priority = (tci >> 13) & 0x7
+                    vlan_id = tci & 0x0FFF
+                    # Actual EtherType is after VLAN tag
+                    ethertype = struct.unpack('!H', data[16:18])[0]
+                    ip_offset = 18
+                
+                # EtherType name mapping
                 ethertype_map = {
                     0x0800: 'IPv4',
                     0x0806: 'ARP',
                     0x86DD: 'IPv6',
-                    0x8100: 'VLAN-tagged',
-                    0x8847: 'MPLS unicast',
-                    0x8848: 'MPLS multicast'
+                    0x8100: 'VLAN (802.1Q)',
+                    0x88A8: 'VLAN (802.1ad)',
+                    0x8847: 'MPLS Unicast',
+                    0x8848: 'MPLS Multicast',
+                    0x8863: 'PPPoE Discovery',
+                    0x8864: 'PPPoE Session'
                 }
-                ethertype_name = ethertype_map.get(ethertype, f'Unknown (0x{ethertype:04x})')
-                
-                ip_offset = 14
+                ethertype_name = ethertype_map.get(ethertype, f'Unknown (0x{ethertype:04X})')
+
             
             # 2. Parse IP Header (COMPLETE - All Fields)
             if ethertype == 0x0800: # IPv4
@@ -545,6 +563,10 @@ class PacketParser:
                     'type': 'IP',
                     'src_mac': src_mac,
                     'dst_mac': dst_mac,
+                    'ethertype': ethertype,
+                    'ethertype_name': ethertype_name,
+                    'vlan_id': vlan_id,  # VLAN ID if 802.1Q tagged
+                    'vlan_priority': vlan_priority,  # VLAN priority if tagged
                     # Complete IP Header Fields
                     'ip_version': version,
                     'ip_ihl': ihl,
