@@ -3,83 +3,171 @@ import socket
 from utils.constants import *
 from utils.oui import get_vendor
 
+# Monitor mode: Radiotap + 802.11 Header + Payload + FCS
+# Managed mode: Ethernet Header + Payload
+
 class PacketParser:
     @staticmethod
     def parse_radiotap(packet):
         """
-        Parses the Radiotap header to extract signal strength (dBm).
-        Returns (header_length, signal_strength)
+        Enhanced Radiotap parser - extracts comprehensive physical layer metrics.
+        
+        Returns dict with:
+            header_length, signal, noise, snr, rate, channel_freq, channel_number,
+            tx_power, vendor_oui, and more
         """
         try:
             # Radiotap Header: Version(1), Pad(1), Len(2), Present(4)
-            if len(packet) < 8: return 0, 0
+            if len(packet) < 8:
+                return {'header_length': 0, 'signal': -100}
             
-            radiotap_len = struct.unpack('H', packet[2:4])[0]
-            present_0 = struct.unpack('I', packet[4:8])[0]
+            radiotap_len = struct.unpack('<H', packet[2:4])[0]
+            present_0 = struct.unpack('<I', packet[4:8])[0]
+            
+            # Validate length
+            if radiotap_len > len(packet) or radiotap_len < 8:
+                print(f"Invalid Radiotap length: {radiotap_len}")
+                return {'header_length': 0, 'signal': -100}
             
             # Check if another present word exists (bit 31)
             offset = 8
             current_present = present_0
             while current_present & 0x80000000:
-                # Skip extended bitmaps
-                # We need to read the next bitmap to check its extension bit
-                if offset + 4 > len(packet): break
-                current_present = struct.unpack('I', packet[offset:offset+4])[0]
+                if offset + 4 > len(packet):
+                    break
+                current_present = struct.unpack('<I', packet[offset:offset+4])[0]
                 offset += 4
-            
-            # Now we are at the data fields.
-            # We use present_0 to check for fields.
-            # Bit 0: TSFT (8 bytes, align 8)
-            # Bit 1: Flags (1 byte)
-            # Bit 2: Rate (1 byte)
-            # Bit 3: Channel (4 bytes, align 2)
-            # Bit 4: FHSS (2 bytes)
-            # Bit 5: Antenna Signal (1 byte)
             
             # Helper to align offset
             def align(off, alignment):
                 if off % alignment != 0:
                     return off + (alignment - (off % alignment))
                 return off
-
-            # TSFT (Bit 0)
+            
+            # Initialize result with defaults
+            result = {
+                'header_length': radiotap_len,
+                'signal': -100,
+                'noise': -100,
+                'snr': 0,
+                'rate': 0.0,
+                'channel_freq': 0,
+                'channel_number': 0,
+                'channel_flags': 0,
+                'tx_power': None,
+                'vendor_oui': None,
+                'tsft': 0,
+                'flags': 0
+            }
+            
+            # Bit 0: TSFT (timestamp)
             if present_0 & 0x1:
                 offset = align(offset, 8)
+                if offset + 8 <= radiotap_len:
+                    result['tsft'] = struct.unpack('<Q', packet[offset:offset+8])[0]
                 offset += 8
             
-            # Flags (Bit 1)
+            # Bit 1: Flags
             if present_0 & 0x2:
                 offset = align(offset, 1)
+                if offset + 1 <= radiotap_len:
+                    result['flags'] = packet[offset]
                 offset += 1
             
-            # Rate (Bit 2)
+            # Bit 2: Rate
             if present_0 & 0x4:
                 offset = align(offset, 1)
+                if offset + 1 <= radiotap_len:
+                    result['rate'] = packet[offset] * 0.5  # 500 kbps units → Mbps
                 offset += 1
             
-            # Channel (Bit 3)
+            # Bit 3: Channel
             if present_0 & 0x8:
                 offset = align(offset, 2)
+                if offset + 4 <= radiotap_len:
+                    freq, flags = struct.unpack('<HH', packet[offset:offset+4])
+                    result['channel_freq'] = freq
+                    result['channel_flags'] = flags
+                    # Calculate channel number from frequency
+                    if 2412 <= freq <= 2472:
+                        result['channel_number'] = (freq - 2407) // 5
+                    elif freq == 2484:
+                        result['channel_number'] = 14
+                    elif freq >= 5000:
+                        result['channel_number'] = (freq - 5000) // 5
                 offset += 4
             
-            # FHSS (Bit 4)
+            # Bit 4: FHSS
             if present_0 & 0x10:
                 offset = align(offset, 2)
                 offset += 2
             
-            # Antenna Signal (Bit 5)
-            signal_strength = -100 # Default
+            # Bit 5: Antenna Signal 
             if present_0 & 0x20:
                 offset = align(offset, 1)
-                if offset < radiotap_len:
-                    # Signal is a signed byte (int8)
-                    signal_strength = struct.unpack('b', packet[offset:offset+1])[0]
+                if offset + 1 <= radiotap_len:
+                    result['signal'] = struct.unpack('b', packet[offset:offset+1])[0]
+                offset += 1
             
-            return radiotap_len, signal_strength
+            # Bit 6: Antenna Noise
+            if present_0 & 0x40:
+                offset = align(offset, 1)
+                if offset + 1 <= radiotap_len:
+                    result['noise'] = struct.unpack('b', packet[offset:offset+1])[0]
+                    result['snr'] = result['signal'] - result['noise']
+                offset += 1
+            
+            # Bit 7: Lock Quality
+            if present_0 & 0x80:
+                offset = align(offset, 2)
+                offset += 2
+            
+            # Bit 8: TX Attenuation
+            if present_0 & 0x100:
+                offset = align(offset, 2)
+                offset += 2
+            
+            # Bit 9: dB TX Attenuation
+            if present_0 & 0x200:
+                offset = align(offset, 2)
+                offset += 2
+            
+            # Bit 10: dBm TX Power
+            if present_0 & 0x400:
+                offset = align(offset, 1)
+                if offset + 1 <= radiotap_len:
+                    result['tx_power'] = struct.unpack('b', packet[offset:offset+1])[0]
+                offset += 1
+            
+            # Bit 11: Antenna
+            if present_0 & 0x800:
+                offset = align(offset, 1)
+                offset += 1
+            
+            # Bit 12: dB Antenna Signal
+            if present_0 & 0x1000:
+                offset = align(offset, 1)
+                offset += 1
+            
+            # Bit 13: dB Antenna Noise
+            if present_0 & 0x2000:
+                offset = align(offset, 1)
+                offset += 1
+            
+            # Bit 30: Vendor Namespace
+            if present_0 & 0x40000000:
+                offset = align(offset, 2)
+                if offset + 6 <= radiotap_len:
+                    # OUI is first 3 bytes
+                    oui = packet[offset:offset+3]
+                    result['vendor_oui'] = ':'.join(f'{b:02x}' for b in oui)
+                offset += 6  # Skip entire vendor namespace
+            
+            return result
             
         except Exception as e:
             print(f"Parse Radiotap Error: {e}")
-            return 0, 0
+            return {'header_length': 0, 'signal': -100}
 
     @staticmethod
     def parse_rsn_ie(tag_data):
@@ -189,13 +277,22 @@ class PacketParser:
             return {'security': 'WPA2'}
 
     @staticmethod
-    def parse_80211(packet, radiotap_len):
+    def parse_80211(packet, radiotap_info):
         """
-        Parses 802.11 frame.
+        Parses 802.11 frame with Radiotap context.
         Returns a dictionary with frame info if it's a Beacon, else None.
+        
+        Args:
+            packet: Raw packet bytes
+            radiotap_info: Dict from parse_radiotap() with physical layer data
         """
         try:
+            radiotap_len = radiotap_info.get('header_length', 0)
+            if radiotap_len == 0:
+                return None
+                
             frame = packet[radiotap_len:]
+
             if len(frame) < 24:
                 return None
             
@@ -215,9 +312,12 @@ class PacketParser:
                 # Tags start at 24 + 12 = 36
                 tag_offset = 36
                 
-                ssid = "<Hidden>"
-                channel = 0
+                ssid = ""
                 security = "Open"
+                rsn_details = {}
+                # Prefer Radiotap channel (ground truth) with fallback to beacon tag
+                channel = radiotap_info.get('channel_number', 0)
+                beacon_channel = 0  # Will be set from DS Parameter Set if present
                 
                 while tag_offset < len(frame):
                     if tag_offset + 2 > len(frame): 
@@ -238,7 +338,11 @@ class PacketParser:
                             ssid = tag_data.hex()
                     elif tag_num == 3: # DS Parameter Set (Channel)
                         if len(tag_data) == 1:
-                            channel = tag_data[0]
+                            beacon_channel = tag_data[0]
+                            # Use beacon channel only if Radiotap didn't provide it
+                            if channel == 0:
+                                channel = beacon_channel
+
                     elif tag_num == 48: # RSN (WPA2/WPA3)
                         # Parse detailed RSN information
                         rsn_info = PacketParser.parse_rsn_ie(tag_data)
@@ -264,9 +368,18 @@ class PacketParser:
                     'ssid': ssid,
                     'bssid': bssid_str,
                     'channel': channel,
+                    'channel_freq': radiotap_info.get('channel_freq', 0),
                     'security': security,
-                    'vendor': vendor
+                    'vendor': vendor,
+                    # Radiotap physical layer metrics
+                    'signal': radiotap_info.get('signal', -100),
+                    'noise': radiotap_info.get('noise', -100),
+                    'snr': radiotap_info.get('snr', 0),
+                    'rate': radiotap_info.get('rate', 0.0),
+                    'tx_power': radiotap_info.get('tx_power'),
+                    'vendor_oui': radiotap_info.get('vendor_oui')
                 }
+
                 
                 # Add detailed RSN info if available
                 if 'rsn_details' in locals() and rsn_details:

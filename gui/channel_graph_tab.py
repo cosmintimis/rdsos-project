@@ -78,6 +78,10 @@ class ChannelGraphTab(ttk.Frame):
             signal = data.get('signal', -100)
             ssid = data.get('ssid', '')
             
+            # Use BSSID as fallback for empty SSID
+            if not ssid or ssid == '':
+                ssid = f"({bssid[:8]}...)"
+            
             if not channel or signal < -90 or channel > 14: continue
             
             # Channel width for 2.4GHz is ~22MHz, spanning about 4-5 channels visually
@@ -134,7 +138,7 @@ class ChannelGraphTab(ttk.Frame):
             )
             
             # Draw label with SSID and channel
-            label_text = f"{ssid} ({channel})" if ssid else f"({channel})"
+            label_text = f"{ssid} ({channel})"
             
             # Draw text background for better readability
             self.graph_canvas.create_text(

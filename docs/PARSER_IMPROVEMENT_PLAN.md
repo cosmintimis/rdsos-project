@@ -137,15 +137,21 @@ def parse_radiotap(packet):
             offset = align(offset, 2)
             offset += 2
         
-        # Bit 10: dBm TX Power
+        
+        # Bit 10: dBm TX Power ⭐ HIGH VALUE - Use for distance calculation!
         if present_0 & 0x400:
             offset = align(offset, 1)
+            if offset + 1 <= radiotap_len:
+                result['tx_power'] = struct.unpack('b', packet[offset:offset+1])[0]
             offset += 1
         
         # Bit 11: Antenna
         if present_0 & 0x800:
             offset = align(offset, 1)
+            if offset + 1 <= radiotap_len:
+                result['antenna'] = packet[offset]
             offset += 1
+
         
         # Bit 12: dB Antenna Signal
         if present_0 & 0x1000:
@@ -169,6 +175,16 @@ def parse_radiotap(packet):
                 if known & 0x04:  # Guard interval known
                     result['guard_interval'] = 'short' if flags & 0x04 else 'long'
             offset += 3
+        
+        # Bit 30: Vendor Namespace ⭐ NEW - Extract OUI for vendor detection!
+        if present_0 & 0x40000000:  # Bit 30
+            offset = align(offset, 2)
+            if offset + 6 <= radiotap_len:
+                # Vendor namespace: OUI (3 bytes) + Sub-namespace (1) + Length (2)
+                oui = packet[offset:offset+3]
+                result['vendor_oui'] = ':'.join(f'{b:02x}' for b in oui)
+                # Skip sub-namespace and length, data varies by vendor
+            offset += 6  # Minimum vendor namespace size
         
         return result
         
@@ -358,6 +374,9 @@ class RadiotapInfo:
     channel_flags: int = 0
     tsft: int = 0
     flags: int = 0
+    tx_power: int = 15  # dBm (default assumption)
+    antenna: int = 0
+    vendor_oui: Optional[str] = None  # From Radiotap Vendor Namespace
     mcs_index: Optional[int] = None
     guard_interval: Optional[str] = None
     

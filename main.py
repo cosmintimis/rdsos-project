@@ -88,19 +88,20 @@ def packet_handler(raw_data, result_queue, debug=False, managed=False):
         print(f"[DEBUG] Packet len: {len(raw_data)}")
 
     radiotap_len = 0
-    signal = 0
     
     if not managed:
-        # 1. Parse Radiotap (only in Monitor mode)
-        radiotap_len, signal = PacketParser.parse_radiotap(raw_data)
+        # 1. Parse Enhanced Radiotap (only in Monitor mode)
+        radiotap_info = PacketParser.parse_radiotap(raw_data)
+        radiotap_len = radiotap_info.get('header_length', 0)
         
-        if debug and signal != 0:
-            print(f"[DEBUG] Signal: {signal} dBm")
+        if debug and radiotap_info.get('signal', -100) != -100:
+            print(f"[DEBUG] Radiotap: Signal={radiotap_info.get('signal')} dBm, "
+                  f"Rate={radiotap_info.get('rate')} Mbps, "
+                  f"SNR={radiotap_info.get('snr')} dB")
         
-        # 2. Parse 802.11 Beacon
-        beacon_info = PacketParser.parse_80211(raw_data, radiotap_len)
+        # 2. Parse 802.11 Beacon with Radiotap context
+        beacon_info = PacketParser.parse_80211(raw_data, radiotap_info)
         if beacon_info:
-            beacon_info['signal'] = signal # Add signal from Radiotap
             if debug:
                 print(f"[DEBUG] Beacon: {beacon_info}")
             result_queue.put(beacon_info)

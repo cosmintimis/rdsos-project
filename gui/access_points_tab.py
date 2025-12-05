@@ -95,17 +95,22 @@ class AccessPointsTab(ttk.Frame):
         if not data:
             return
         
+        # Use BSSID as fallback for empty/hidden SSID
+        ssid = data.get('ssid', '')
+        if not ssid or ssid == '':
+            ssid = f"Unknown ({bssid[:8]}...)"
+        
         dialog = tk.Toplevel(self)
-        dialog.title(f"Details: {data.get('ssid', '<Hidden>')}")
-        dialog.geometry("500x400")
+        dialog.title(f"Details: {ssid}")
+        dialog.geometry("550x550")
         dialog.configure(bg="#2b2b2b")
         
         # Make dialog modal - wait for visibility first
         dialog.transient(self)
-        dialog.wait_visibility()  # Wait for window to be viewable
+        dialog.wait_visibility()
         dialog.grab_set()
         
-        # Content frame with padding
+        # Scrollable content frame with padding
         content = tk.Frame(dialog, bg="#2b2b2b", padx=20, pady=20)
         content.pack(fill=tk.BOTH, expand=True)
         
@@ -122,28 +127,67 @@ class AccessPointsTab(ttk.Frame):
          
         # Calculate channel information
         channel = data.get('channel', 0)
+        channel_freq = data.get('channel_freq', 0)
         signal = data.get('signal', -100)
-        center_freq = self._channel_to_frequency(channel)
-        distance = self._estimate_distance(signal, center_freq)
+        noise = data.get('noise', -100)
+        snr = data.get('snr', 0)
+        rate = data.get('rate', 0.0)
+        tx_power = data.get('tx_power')
+        vendor_oui = data.get('vendor_oui')
+        
+        center_freq = channel_freq if channel_freq > 0 else self._channel_to_frequency(channel)
+        
+        # Use actual TX power if available, otherwise default
+        distance = self._estimate_distance(signal, center_freq, tx_power)
+        
         bandwidth = 20  # MHz (standard for 2.4 GHz)
         start_freq = center_freq - (bandwidth / 2)
         end_freq = center_freq + (bandwidth / 2)
         signal_quality = self._signal_quality(signal)
+        snr_quality = self._snr_quality(snr) if snr > 0 else "N/A"
+        
+        # Get vendors
+        ap_vendor = get_vendor(data.get('bssid', ''))
+        chipset_vendor = get_vendor(vendor_oui) if vendor_oui else None
         
         details = [
-            ("SSID:", data.get('ssid', 'Unknown')),
+            ("SSID:", ssid),
             ("BSSID (MAC):", data.get('bssid', 'Unknown')),
-            ("Vendor:", get_vendor(data.get('bssid', ''))),
+            ("AP Vendor:", ap_vendor),
+        ]
+        
+        # Add chipset vendor if available from Radiotap
+        if chipset_vendor and chipset_vendor != ap_vendor:
+            details.append(("Chipset:", f"{chipset_vendor} ({vendor_oui})"))
+        
+        details.extend([
             ("", ""),  # Spacer
-            ("Channel:", f"{channel} ({center_freq} MHz) | Est. Distance: ~{distance:.0f}m"),
+            ("Channel:", f"{channel} ({center_freq} MHz)"),
             ("Bandwidth:", f"{bandwidth} MHz ({start_freq:.0f}-{end_freq:.0f} MHz)"),
             ("Band:", "2.4 GHz"),
             ("", ""),  # Spacer
+        ])
+        
+        # Radio metrics section - TX Power only (Rate is misleading - shows beacon tx rate, not AP capability)
+        if tx_power is not None:
+            details.append(("TX Power:", f"{tx_power} dBm"))
+            details.append(("", ""))  # Spacer
+        
+        details.extend([
             ("Signal Strength:", f"{signal} dBm"),
             ("Signal Quality:", signal_quality),
+        ])
+        
+        if noise > -100:
+            details.append(("Noise Floor:", f"{noise} dBm"))
+        if snr > 0:
+            details.append(("SNR:", f"{snr} dB ({snr_quality})"))
+        
+        details.extend([
+            ("Est. Distance:", f"~{distance:.0f}m"),
             ("", ""),  # Spacer
             ("Security:", data.get('security', 'Unknown')),
-        ]
+        ])
         
         # Add RSN security details if available
         if 'auth_methods' in data and data['auth_methods']:
@@ -218,7 +262,11 @@ class AccessPointsTab(ttk.Frame):
 
     def update_list(self):
         for bssid, data in self.networks.items():
-            ssid = data.get('ssid', '<Hidden>')
+            # Use BSSID as fallback for empty SSID
+            ssid = data.get('ssid', '')
+            if not ssid or ssid == '':
+                ssid = f"Unknown ({bssid[:8]}...)"
+            
             signal = data.get('signal', -100)
             channel = data.get('channel', 0)
             crypto = data.get('crypto', 'Open')
@@ -295,7 +343,7 @@ class AccessPointsTab(ttk.Frame):
             return 2484  # Special case for Japan
         return 0
 
-    def _estimate_distance(self, signal_dbm, frequency_mhz):
+    def _estimate_distance(self, signal_dbm, frequency_mhz, tx_power_dbm=None):
         """
         Estimate distance from signal strength using a practical indoor model
         
@@ -305,7 +353,7 @@ class AccessPointsTab(ttk.Frame):
           n = path loss exponent (2.0 for free space, 3.0-4.0 for indoor)
         
         Assumptions:
-          - TX power: ~15 dBm (realistic for most WiFi APs at antenna)
+          - TX power: from Radiotap if available, otherwise ~15 dBm
           - Path loss exponent: 2.5 (typical indoor environment)
           - Reference distance: 1 meter
         
@@ -316,9 +364,11 @@ class AccessPointsTab(ttk.Frame):
         """
         import math
         
-        # More realistic TX power for indoor WiFi APs
-        # (accounts for actual antenna output, not regulatory max)
-        TX_POWER = 15  # dBm
+        # Use Radiotap TX power if available, otherwise fallback
+        if tx_power_dbm is not None:
+            TX_POWER = tx_power_dbm
+        else:
+            TX_POWER = 15  # dBm fallback assumption
         
         # Path loss at reference distance (1 meter) for 2.4 GHz
         # Using FSPL: PL(1m) = 20*log10(frequency) + 20*log10(1) + 32.45 - 20*log10(c/f)
@@ -344,7 +394,7 @@ class AccessPointsTab(ttk.Frame):
             return 1  # Very close, minimum 1 meter
 
     def _signal_quality(self, signal_dbm):
-        """Enhanced signal quality descriptions matching 7-tier color system"""
+        """Describe signal quality based on signal strength"""
         if signal_dbm >= -30:
             return "Perfect"
         elif signal_dbm >= -50:
@@ -359,3 +409,16 @@ class AccessPointsTab(ttk.Frame):
             return "Weak"
         else:
             return "Poor"
+    
+    def _snr_quality(self, snr_db):
+        """Evaluate SNR (Signal-to-Noise Ratio) quality"""
+        if snr_db >= 40:
+            return "Excellent"
+        elif snr_db >= 25:
+            return "Good"
+        elif snr_db >= 15:
+            return "Fair"
+        elif snr_db >= 10:
+            return "Poor"
+        else:
+            return "Very Poor"
