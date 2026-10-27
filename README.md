@@ -164,7 +164,9 @@ project-rdsos/
 │   ├── constants.py          # Protocol IDs, frequency calculations
 │   ├── oui.py               # MAC vendor lookup (IEEE database)
 │   └── update_oui.py        # OUI database updater
-└── README.md, TECHNICAL_GUIDE.md  # Documentation
+├── tests/                    # Parser tests and debug scripts
+├── docs/                     # Technical, parser and packet structure guides
+└── README.md
 ```
 
 ## 🎓 Educational Value
@@ -231,8 +233,9 @@ nmcli dev status  # Check connection
 
 ## 📚 Documentation
 
-- **[TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md)**: Deep dive into WiFi theory, packet structure, protocol details
-- **[task.md](/.gemini/.../task.md)**: Development task tracking
+- **[TECHNICAL_GUIDE.md](docs/TECHNICAL_GUIDE.md)**: Deep dive into WiFi theory, packet structure, protocol details
+- **[PARSER_GUIDE.md](docs/PARSER_GUIDE.md)**: How `core/parser.py` turns raw bytes into fields
+- **[PACKET_STRUCTURE.md](docs/PACKET_STRUCTURE.md)**: Byte layout of monitor-mode packets
 - Code comments: Detailed explanations in parser.py
 
 ## 🎯 Future Enhancements
@@ -265,61 +268,3 @@ Packet sniffing and network analysis may be illegal without proper authorization
 ---
 
 **Made for educational purposes to understand WiFi and network protocols from the ground up.**
-
-2. **Channel Hopping**: Cycles through channels 1-13 to detect all networks
-3. **Packet Capture**: Raw socket (`AF_PACKET`) receives all traffic
-4. **Manual Parsing**: 
-   - Radiotap header → extract signal strength
-   - 802.11 header → identify beacons, extract SSID/BSSID
-   - IP/TCP headers → extract network traffic details
-5. **Queue-based UI**: Background threads push data to GUI via `queue.Queue`
-
-## Troubleshooting
-
-### No packets captured
-
-**Problem**: `tcpdump` shows 0 packets on monitor interface
-
-**Solutions**:
-1. Ensure monitor mode is active: `iwconfig wlan0`
-2. Check for 2.4GHz networks nearby: `sudo iwlist wlan0 scan | grep "2.4"`
-3. Try different WiFi adapter (some chipsets have poor monitor mode support)
-4. Run `sudo airmon-ng check kill` to stop interfering processes
-
-### GUI doesn't start
-
-**Problem**: Application runs but no window appears
-
-**Solutions**:
-1. Ensure you have X11 display: `echo $DISPLAY`
-2. If using SSH, enable X11 forwarding: `ssh -X user@host`
-3. Check for errors in terminal output
-
-### Empty access points list
-
-**Problem**: GUI loads but no networks appear
-
-**Solutions**:
-1. Wait for channel hopper to cycle (13 channels × 0.5s = ~6.5 seconds)
-2. Lock to a channel with active networks: `sudo python3 main.py -i wlan0 -c 1`
-3. Verify `airodump-ng wlan0` can see networks
-
-## Educational Purpose
-
-This project was built as a learning exercise to understand:
-- Raw socket programming in Python
-- WiFi protocol stack (802.11, Radiotap)
-- Packet structure and manual byte parsing
-- Linux wireless tools and monitor mode
-- GUI development with Tkinter
-
-**Note**: This tool is for educational purposes only. Only use on networks you own or have permission to analyze.
-
-## Credits
-
-- **OUI Database**: [IEEE Registration Authority](https://standards.ieee.org/develop/regauth/oui/oui.txt)
-- **Inspired by**: Android WiFi Analyzer
-
-## License
-
-Educational use only. Not for commercial or malicious purposes.
